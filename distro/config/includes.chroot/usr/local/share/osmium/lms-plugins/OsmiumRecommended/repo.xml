@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Self-hosted LMS plugin repository entry for third-party Lyrion servers. Add its
+  URL in Lyrion: Settings -> Plugins -> Additional Repositories, then install
+  "Osmium Recommended". Update <url> to the real hosted ZIP and fill <sha> with
+  its SHA-1 before publishing (the package name inside the ZIP must stay
+  Plugins::OsmiumRecommended, and the ZIP filename should carry the version).
+
+  On the Osmium appliance the plugin is not installed from here: it ships inside
+  the image under /usr/local/share/osmium/lms-plugins and is re-asserted into the
+  server's Plugins dir on every boot by hifi-lyrion-plugins-ensure.sh.
+-->
+<extensions>
+	<details>
+		<title lang="EN">Osmium Sound</title>
+	</details>
+	<plugins>
+		<plugin name="OsmiumRecommended" version="0.1.0" minTarget="7.9" maxTarget="9.*">
+			<title lang="EN">Osmium Recommended</title>
+			<title lang="IT">Osmium Consigliati</title>
+			<desc lang="EN">Shows the albums Osmium recommends for you as a browsable, playable menu inside Lyrion, so the list appears in Material Skin too.</desc>
+			<desc lang="IT">Mostra gli album che Osmium ti consiglia come menu navigabile e riproducibile dentro Lyrion, così la lista compare anche in Material Skin.</desc>
+			<url>https://downloads.osmium.audio/lms-plugins/OsmiumRecommended-0.1.0.zip</url>
+			<sha>0000000000000000000000000000000000000000</sha>
+			<link>https://osmium.audio</link>
+			<creator>Osmium Sound</creator>
+		</plugin>
+	</plugins>
+</extensions>

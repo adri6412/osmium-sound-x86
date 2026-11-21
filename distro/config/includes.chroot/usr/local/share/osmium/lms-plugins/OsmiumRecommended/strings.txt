@@ -1,0 +1,27 @@
+PLUGIN_OSMIUMRECOMMENDED
+	EN	Recommended
+	IT	Consigliati
+
+PLUGIN_OSMIUMRECOMMENDED_DESC
+	EN	Shows the albums Osmium recommends for you — the "Consigliati" list computed on the box from your listening — as a browsable, playable menu inside Lyrion, so it also appears in Material Skin.
+	IT	Mostra gli album che Osmium ti consiglia — la lista "Consigliati" calcolata sul dispositivo dai tuoi ascolti — come menu navigabile e riproducibile dentro Lyrion, così compare anche in Material Skin.
+
+PLUGIN_OSMIUMRECOMMENDED_UNAVAILABLE
+	EN	Recommendations are not available right now.
+	IT	I consigliati non sono disponibili al momento.
+
+PLUGIN_OSMIUMRECOMMENDED_DISABLED
+	EN	Recommendations are turned off. Enable them in the Osmium settings.
+	IT	I consigliati sono disattivati. Attivali nelle impostazioni di Osmium.
+
+PLUGIN_OSMIUMRECOMMENDED_FEWPLAYS
+	EN	Not enough listening history yet to recommend anything.
+	IT	Ascolti ancora insufficienti per poter consigliare qualcosa.
+
+PLUGIN_OSMIUMRECOMMENDED_NEVERRUN
+	EN	Recommendations have not been computed yet.
+	IT	I consigliati non sono ancora stati calcolati.
+
+PLUGIN_OSMIUMRECOMMENDED_EMPTY
+	EN	No recommendations to show.
+	IT	Nessun consigliato da mostrare.
