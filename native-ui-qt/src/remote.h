@@ -226,4 +226,16 @@ private:
     QElapsedTimer m_clock;
     QString m_lastAction, m_lastSource;
     qint64 m_lastAt = -10000;
+    // 🚨 Guardia sorgente-agnostica in dispatch(). La strada Qt (QKeyEvent ->
+    // dispatch(..., "qt") in main.cpp) NON passa da onKey, quindi i guard
+    // anti-raffica e anti-incastro di onKey non la coprono. Durante un
+    // riaggancio BT il nodo del Fire TV resta per un attimo non preso in
+    // esclusiva e Qt ne legge i tasti: lo scarico della matrice (raffica di
+    // azioni fresche) o una ripetizione fantasma (un key-up perso -> autorepeat
+    // di Qt senza fine) arrivano di sola sorgente "qt", e il dedup qui sopra non
+    // li ferma perche' scarta solo sorgenti DIVERSE. Questi due contatori li
+    // fermano per QUALUNQUE sorgente.
+    qint64 m_freshBurstStart = 0;   // inizio finestra della raffica di azioni fresche
+    int     m_freshBurstCount = 0;
+    qint64 m_runStart = 0;          // da quando la stessa azione si ripete di fila
 };

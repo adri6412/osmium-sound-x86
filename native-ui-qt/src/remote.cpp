@@ -722,6 +722,27 @@ void Remote::dispatch(const QString &act, bool repeat, const QString &source) {
     // tasto tenuto premuto vale lo stesso, con una finestra piu' corta della
     // nostra ripetizione, o la lista scorrerebbe a velocita' doppia.
     if (act == m_lastAction && source != m_lastSource && now - m_lastAt < (repeat ? 100 : 250)) return;
+
+    // 🚨 Raffica sorgente-agnostica: troppe azioni FRESCHE (non ripetizioni) in
+    // una finestra breve = lo scarico della matrice tasti di un telecomando che
+    // si riaggancia, tipico sulla strada "qt" (che non passa da onKey). Oltre la
+    // soglia si scarta finche' non torna la quiete; si auto-guarisce in
+    // kBurstWindowMs. Una mano non fa mai piu' di kBurstMax pressioni in 150 ms;
+    // le ripetizioni di un tasto tenuto non contano qui (sono "repeat").
+    if (!repeat) {
+        if (now - m_freshBurstStart > kBurstWindowMs) { m_freshBurstStart = now; m_freshBurstCount = 0; }
+        if (++m_freshBurstCount > kBurstMax) return;
+    }
+    // 🚨 Ripetizione fantasma: un key-up perso a cavallo del riaggancio lascia Qt
+    // a ripetere lo stesso tasto all'infinito (la strada "qt" non ha il watchdog
+    // di onKey; prima serviva togliere le batterie). Se la stessa azione si
+    // ripete di fila oltre kHeldMaxMs la fermiamo: nessuno tiene un tasto cosi'.
+    if (repeat && act == m_lastAction && source == m_lastSource) {
+        if (m_runStart && now - m_runStart > kHeldMaxMs) return;
+    } else {
+        m_runStart = now;
+    }
+
     m_lastAction = act;
     m_lastSource = source;
     m_lastAt = now;
