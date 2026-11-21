@@ -301,6 +301,23 @@ bool Remote::isChosen(const Dev &d) const {
     return !m_chosen.isEmpty() && (d.name == m_chosen || d.group == m_chosen);
 }
 
+// quanto a lungo, dopo l'apertura di un nodo, si scartano gli eventi: coerente
+// col debounce del rescan (600 ms), il tempo in cui un telecomando BT che si
+// riaggancia al risveglio consegna il suo burst di eventi stantii
+static constexpr qint64 kSettleMs = 400;
+// 🚨 raffica da riaggancio BT: piu' di kBurstMax pressioni "fresche" (value 1)
+// entro kBurstWindowMs e' impossibile per una mano su un telecomando — e'
+// il burst stantio del riaggancio (o un link degradato che per un tasto ne
+// consegna a caso diversi). La finestra di settle scatta solo quando il nodo
+// viene riaperto; questa guardia copre il caso in cui il telecomando si
+// riaggancia senza che event* venga chiuso/riaperto, o il burst arriva tardi.
+static constexpr qint64 kBurstWindowMs = 150;
+static constexpr int     kBurstMax     = 5;
+// 🚨 un tasto tenuto oltre questo non e' una mano: un key-up perso a cavallo di
+// una disconnessione lo libera da solo (prima serviva togliere le batterie).
+// Alto abbastanza da non tagliare un hold-per-scorrere voluto.
+static constexpr qint64 kHeldMaxMs = 12000;
+
 Remote::Remote(const QString &configDir, QObject *parent) : QObject(parent), m_configDir(configDir) {
     m_clock.start();
     loadChosen();
@@ -341,6 +358,9 @@ Remote::Remote(const QString &configDir, QObject *parent) : QObject(parent), m_c
     m_repeat.setSingleShot(false);
     connect(&m_repeat, &QTimer::timeout, this, [this]() {
         if (m_repeatAction.isEmpty()) { m_repeat.stop(); return; }
+        // 🚨 key-up perso: fermiamo la ripetizione nostra dopo kHeldMaxMs invece
+        // di scorrere all'infinito (lo stesso cap del percorso del nucleo).
+        if (m_repeatStartedAt && m_clock.elapsed() - m_repeatStartedAt > kHeldMaxMs) { stopRepeat(); return; }
         m_repeat.setInterval(120);
         dispatch(m_repeatAction, true, QStringLiteral("evdev"));
     });
@@ -570,11 +590,6 @@ void Remote::readFrom(const QString &path) {
     }
 }
 
-// quanto a lungo, dopo l'apertura di un nodo, si scartano gli eventi: coerente
-// col debounce del rescan (600 ms), il tempo in cui un telecomando BT che si
-// riaggancia al risveglio consegna il suo burst di eventi stantii
-static constexpr qint64 kSettleMs = 400;
-
 void Remote::onKey(Dev &dev, int code, int value) {
     // 🚨 Finestra di assestamento: appena (ri)aperto il nodo, un telecomando BT
     // che si riconnette al risveglio puo' consegnare un burst di eventi stantii
@@ -588,8 +603,39 @@ void Remote::onKey(Dev &dev, int code, int value) {
     // visto premere — tipicamente uno "tenuto" a cavallo di una disconnessione,
     // i cui repeat riprendono al riaggancio — non deve agire da sola.
     if (value == 2 && !dev.down.contains(code)) return;
-    if (value == 1) dev.down.insert(code);
-    else if (value == 0) dev.down.remove(code);
+
+    // 🚨 Raffica: contiamo le pressioni fresche in una finestra breve. Oltre la
+    // soglia riapriamo la finestra di assestamento (anche se il nodo non e'
+    // stato riaperto) e scartiamo il resto, cosi' il telecomando che "impazzisce"
+    // si calma da solo invece di richiedere di togliere le batterie. Una falsa
+    // raffica costa solo kSettleMs di input scartato: si auto-guarisce.
+    if (value == 1) {
+        const qint64 now = m_clock.elapsed();
+        if (now - dev.burstStart > kBurstWindowMs) { dev.burstStart = now; dev.burstCount = 0; }
+        if (++dev.burstCount > kBurstMax) {
+            dev.openedAt = now;          // riapre la finestra di settle
+            dev.down.clear();
+            dev.downAt.clear();
+            if (m_repeatCode) stopRepeat();
+            return;
+        }
+    }
+
+    if (value == 1) { dev.down.insert(code); dev.downAt.insert(code, m_clock.elapsed()); }
+    else if (value == 0) { dev.down.remove(code); dev.downAt.remove(code); }
+
+    // 🚨 Tasto incastrato: un key-up perso lascia il codice premuto e il nucleo
+    // lo ripete (value 2) senza fine. Oltre kHeldMaxMs lo liberiamo noi — prima
+    // l'unico modo era togliere e rimettere le batterie.
+    if (value == 2) {
+        const qint64 t0 = dev.downAt.value(code, 0);
+        if (t0 && m_clock.elapsed() - t0 > kHeldMaxMs) {
+            dev.down.remove(code);
+            dev.downAt.remove(code);
+            if (code == m_repeatCode) stopRepeat();
+            return;
+        }
+    }
 
     const QString act = actionFor(code, dev.name);
 
@@ -651,6 +697,7 @@ void Remote::onKey(Dev &dev, int code, int value) {
 
 void Remote::startRepeat(const QString &act) {
     m_repeatAction = act;
+    m_repeatStartedAt = m_clock.elapsed();
     m_kernelRepeats = false;
     // 400 ms prima della seconda, poi una ogni 120: la stessa cadenza di una
     // tastiera. Se intanto arrivano le ripetizioni del nucleo, il timer si
@@ -663,6 +710,7 @@ void Remote::stopRepeat() {
     m_repeat.stop();
     m_repeatAction.clear();
     m_repeatCode = 0;
+    m_repeatStartedAt = 0;
 }
 
 void Remote::dispatch(const QString &act, bool repeat, const QString &source) {

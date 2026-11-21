@@ -152,6 +152,19 @@ private:
         // non abbiamo mai visto premere — uno "tenuto" a cavallo di una
         // disconnessione — non deve agire da sola
         QSet<int> down;
+        // 🚨 quando ciascun codice e' andato giu': un key-up perso a cavallo di
+        // una disconnessione BT lascerebbe il tasto "premuto" e il nucleo lo
+        // ripeterebbe senza fine (il telecomando "impazzisce" finche' non si
+        // tolgono le batterie). Oltre un tempo che nessuno tiene davvero, lo
+        // liberiamo noi.
+        QHash<int, qint64> downAt;
+        // 🚨 rilevatore di raffica: un riaggancio BT (o un link degradato che
+        // per un tasto ne consegna a caso diversi) spara molte pressioni in
+        // pochi ms, impossibili per una mano. Oltre la soglia si riapre la
+        // finestra di assestamento e si butta il resto — anche se il nodo non
+        // e' stato riaperto, quindi la sola finestra di settle non basterebbe.
+        qint64 burstStart = 0;
+        int burstCount = 0;
     };
 
     static QString groupKey(const QString &dir, const QString &fallback);
@@ -204,6 +217,10 @@ private:
     QTimer m_repeat;
     QString m_repeatAction;
     int m_repeatCode = 0;
+    // 🚨 da quando ripetiamo: un key-up perso farebbe ripetere all'infinito
+    // anche quando la ripetizione la guidiamo noi (non il nucleo); oltre un
+    // tempo che nessuno tiene premuto davvero, ci fermiamo da soli.
+    qint64 m_repeatStartedAt = 0;
     bool m_kernelRepeats = false;
     // doppione fra sorgenti diverse
     QElapsedTimer m_clock;
