@@ -231,6 +231,13 @@ jobs:
           # into Lyrion's prefs by sources_server.py's lms_skin logic.
           mkdir -p "$ROOT/usr/local/share"
           cp -r distro/config/includes.chroot/usr/local/share/hifi-lms-skin "$ROOT/usr/local/share/"
+          # Osmium LMS plugins (OsmiumConvert, OsmiumRecommended): shipped under
+          # /usr/local/share/osmium/lms-plugins and re-asserted into Lyrion's
+          # plugin dir on every boot by hifi-lyrion-plugins-ensure.sh (copied
+          # above with the other sbin scripts). Without this they reached only
+          # fresh ISO installs, never an OTA system update.
+          mkdir -p "$ROOT/usr/local/share/osmium"
+          cp -r distro/config/includes.chroot/usr/local/share/osmium/lms-plugins "$ROOT/usr/local/share/osmium/"
           # Recommended albums: the project's Last.fm API key, from the secret
           # (never in git, never echoed). Without it the bundle is built all the
           # same, and a device keeps the key its image came with: the installer
