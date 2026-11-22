@@ -313,7 +313,7 @@
   },
   "recommend": {
     "notInterested": "Not interested",
-    "blockArtist": "Don't recommend this artist",
+    "blockArtist": "Don't recommend",
     "blockConfirm": "Stop recommending {name}? This album leaves the list and this artist won't be suggested again. You can re-enable them from Settings → Music → Recommended.",
     "blockedArtists": "Blocked artists",
     "blockedEmpty": "No blocked artists.",

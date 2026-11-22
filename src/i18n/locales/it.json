@@ -313,7 +313,7 @@
   },
   "recommend": {
     "notInterested": "Non mi interessa",
-    "blockArtist": "Non consigliare questo artista",
+    "blockArtist": "Non consigliare",
     "blockConfirm": "Non consigliare più {name}? L'album sparisce dai consigli e questo artista non verrà più proposto. Puoi riattivarlo da Impostazioni → Musica → Consigliati.",
     "blockedArtists": "Artisti esclusi",
     "blockedEmpty": "Nessun artista escluso.",

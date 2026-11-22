@@ -223,17 +223,21 @@ Item {
                 width: parent.width; spacing: 24
                 Text { width: parent.width; text: root.body; wrapMode: Text.Wrap; color: Theme.white; font.family: Theme.font; font.pixelSize: 18; lineHeight: 28; lineHeightMode: Text.FixedHeight }
                 Row {
+                    id: confirmButtons
                     width: parent.width; spacing: 12
+                    // a long label (e.g. "Don't recommend this artist") must wrap
+                    // inside the button, not spill past it: both buttons grow to fit
+                    readonly property real btnH: Math.max(48, Math.max(caTxt.implicitHeight, okTxt.implicitHeight) + 20)
                     Rectangle {
                         visible: !root.noticeOnly
-                        width: (parent.width - 12) / 2; height: 48; radius: 8; color: cTap.mix(Theme.accent, Theme.dark)
-                        Text { anchors.centerIn: parent; text: Tr.t("common.cancel"); color: Theme.white; font.family: Theme.font; font.pixelSize: 16 }
+                        width: (parent.width - 12) / 2; height: confirmButtons.btnH; radius: 8; color: cTap.mix(Theme.accent, Theme.dark)
+                        Text { id: caTxt; anchors.centerIn: parent; width: parent.width - 20; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; text: Tr.t("common.cancel"); color: Theme.white; font.family: Theme.font; font.pixelSize: 16 }
                         Tap { id: cTap; onClicked: root.finishOk(false) }
                     }
                     Rectangle {
-                        width: root.noticeOnly ? parent.width : (parent.width - 12) / 2; height: 48; radius: 8
+                        width: root.noticeOnly ? parent.width : (parent.width - 12) / 2; height: confirmButtons.btnH; radius: 8
                         color: oTap.mix(root.danger ? "#dc2626" : Theme.gold, root.danger ? "#b91c1c" : "#ca8a04")
-                        Text { anchors.centerIn: parent; text: root.okLabel; color: root.danger ? Theme.white : Theme.black; font.family: Theme.font; font.pixelSize: 16; font.bold: true }
+                        Text { id: okTxt; anchors.centerIn: parent; width: parent.width - 20; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; text: root.okLabel; color: root.danger ? Theme.white : Theme.black; font.family: Theme.font; font.pixelSize: 16; font.bold: true }
                         Tap { id: oTap; onClicked: root.finishOk(true) }
                     }
                 }

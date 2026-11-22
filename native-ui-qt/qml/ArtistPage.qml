@@ -18,6 +18,8 @@ Item {
 
     property string portrait: ""
     property string favUrl: ""
+    property bool isFav: false           // the heart reflects the real state and toggles add/remove
+    property string favIndex: ""         // the Lyrion favourites index the artist is saved at
     property var sections: []           // [{title, albums: [{id, album, year, art}]}]
     property int albumsState: 0         // 0 loading 2 ready
     property var meta: null
@@ -51,6 +53,7 @@ Item {
                 if (root.browser) root.browser.setPageTitle(LibraryModel.ArtistPage, root.artistId, root.name)
             }
             root.favUrl = String(a.favorites_url || "")
+            root.checkFav()
             root.portrait = a.portraitid ? String(a.portraitid) : ""
             loadSimilar()
         })
@@ -165,6 +168,35 @@ Item {
         var id = String(p.artist_id || p.id || "")
         if (id && browser) browser.openArtist(id, String(p.name || ""))
         else if (p.mbid && browser) browser.openPerson(String(p.mbid), String(p.name || ""))
+    }
+
+    // ── favourite heart (add / remove, with its real state) ───────────────
+    // the artist favourite is the Lyrion favourite of the artist's url (favUrl)
+    function checkFav() {
+        var url = root.favUrl
+        if (!url) { isFav = false; favIndex = ""; return }
+        Player.favoriteExists(url, function(ex, idx) {
+            if (!root) return
+            root.isFav = !!ex; root.favIndex = ex ? String(idx) : ""
+        })
+    }
+    function toggleFav() {
+        var url = root.favUrl
+        if (!url) return
+        if (isFav) {
+            if (!favIndex) return
+            Player.favoriteDelete(favIndex, function(ok) {
+                if (!root) return
+                if (ok) { root.isFav = false; root.favIndex = ""; if (root.browser) root.browser.say("heart", "player.removedFromFavorites") }
+                else if (root.browser) root.browser.say("alert-triangle", "player.favoriteError")
+            })
+        } else {
+            Player.favoriteAdd(url, root.name, "playlist", "", function(ok) {
+                if (!root) return
+                if (ok) { root.isFav = true; favBtn.burst(); if (root.browser) root.browser.say("heart", "player.addedToFavorites"); root.checkFav() }
+                else if (root.browser) root.browser.say("alert-triangle", "player.favoriteError")
+            })
+        }
     }
 
     readonly property string detailLine: {
@@ -343,7 +375,7 @@ Item {
                         PageButton { id: playBtn; icon: "play"; filled: true; primary: true; label: Tr.t("player.page.play"); onClicked: root.play("load") }
                         PageButton { icon: "shuffle"; label: Tr.t("player.page.shuffle"); onClicked: if (root.browser) root.browser.loadShuffled("artist_id", root.artistId) }
                         PageButton { icon: "list-plus"; onClicked: root.play("add") }
-                        PageButton { id: favBtn; icon: "heart"; visible: root.favUrl !== ""; onClicked: { burst(); if (root.browser) root.browser.addFavorite(root.favUrl, root.name, "playlist") } }
+                        PageButton { id: favBtn; icon: "heart"; filled: root.isFav; visible: root.favUrl !== ""; onClicked: root.toggleFav() }
                     }
                 }
             }
