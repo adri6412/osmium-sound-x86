@@ -49,6 +49,9 @@ BRAND_NAME="${BRAND_NAME:-Osmium Sound}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG="$SCRIPT_DIR/config"
+# Shared custom app code lives in the osmium-core submodule (core/), not at the
+# repo root any more. Every read of app code resolves against $CORE.
+CORE="$REPO_ROOT/core"
 QT_DIR=""            # pacchetto dell'interfaccia Qt (vuoto → cercato da solo)
 NP_DIR=""            # build web Now Playing (/opt/hifi-np; vuoto → cercato da solo)
 APP_VERSION=""
@@ -113,19 +116,19 @@ apt-get install -y --no-install-recommends live-build imagemagick curl xorriso c
 # The python daemons are only needed when we (re)build the chroot. A
 # binary-only re-spin reuses the existing chroot, so skip these.
 if [ "$STAGE" != "binary" ]; then
-    [ -f "$REPO_ROOT/api_server.py" ]      || die "Missing $REPO_ROOT/api_server.py"
-    [ -f "$REPO_ROOT/vu_meter_daemon.py" ] || die "Missing $REPO_ROOT/vu_meter_daemon.py"
-    [ -f "$REPO_ROOT/sources_server.py" ]  || die "Missing $REPO_ROOT/sources_server.py"
-    [ -f "$REPO_ROOT/hifi_logging.py" ]    || die "Missing $REPO_ROOT/hifi_logging.py"
-    [ -f "$REPO_ROOT/hifi_backup.py" ]     || die "Missing $REPO_ROOT/hifi_backup.py"
-    [ -f "$REPO_ROOT/hifi_i18n.py" ]       || die "Missing $REPO_ROOT/hifi_i18n.py"
-    [ -f "$REPO_ROOT/hifi_metadata.py" ]   || die "Missing $REPO_ROOT/hifi_metadata.py"
-    [ -f "$REPO_ROOT/hifi_tags.py" ]       || die "Missing $REPO_ROOT/hifi_tags.py"
-    [ -f "$REPO_ROOT/hifi_squeezelite.py" ] || die "Missing $REPO_ROOT/hifi_squeezelite.py"
-    [ -f "$REPO_ROOT/hifi_cdrip.py" ]      || die "Missing $REPO_ROOT/hifi_cdrip.py"
-    [ -f "$REPO_ROOT/hifi_signal_path.py" ] || die "Missing $REPO_ROOT/hifi_signal_path.py"
-    [ -f "$REPO_ROOT/hifi_diskguard.py" ]  || die "Missing $REPO_ROOT/hifi_diskguard.py"
-    [ -f "$REPO_ROOT/hifi_recommend.py" ]  || die "Missing $REPO_ROOT/hifi_recommend.py"
+    [ -f "$CORE/api_server.py" ]      || die "Missing $CORE/api_server.py"
+    [ -f "$CORE/vu_meter_daemon.py" ] || die "Missing $CORE/vu_meter_daemon.py"
+    [ -f "$CORE/sources_server.py" ]  || die "Missing $CORE/sources_server.py"
+    [ -f "$CORE/hifi_logging.py" ]    || die "Missing $CORE/hifi_logging.py"
+    [ -f "$CORE/hifi_backup.py" ]     || die "Missing $CORE/hifi_backup.py"
+    [ -f "$CORE/hifi_i18n.py" ]       || die "Missing $CORE/hifi_i18n.py"
+    [ -f "$CORE/hifi_metadata.py" ]   || die "Missing $CORE/hifi_metadata.py"
+    [ -f "$CORE/hifi_tags.py" ]       || die "Missing $CORE/hifi_tags.py"
+    [ -f "$CORE/hifi_squeezelite.py" ] || die "Missing $CORE/hifi_squeezelite.py"
+    [ -f "$CORE/hifi_cdrip.py" ]      || die "Missing $CORE/hifi_cdrip.py"
+    [ -f "$CORE/hifi_signal_path.py" ] || die "Missing $CORE/hifi_signal_path.py"
+    [ -f "$CORE/hifi_diskguard.py" ]  || die "Missing $CORE/hifi_diskguard.py"
+    [ -f "$CORE/hifi_recommend.py" ]  || die "Missing $CORE/hifi_recommend.py"
 fi
 
 # ─────────────────────────── Normalise text files ──────────────────
@@ -169,7 +172,7 @@ log "Seeded UI_VERSION = $APP_VERSION"
 # schermo nero (l'hook 0400 abilita hifi-qt.service solo se la trova).
 QT_DEST="$CONFIG/includes.chroot/opt/hifi-qt"
 if [ -z "$QT_DIR" ]; then
-    for c in "$REPO_ROOT/qtui" "$QT_DEST"; do
+    for c in "$REPO_ROOT/qtui" "$CORE/qtui" "$QT_DEST"; do
         [ -x "$c/hifi-qt" ] && QT_DIR="$c" && break
     done
 fi
@@ -288,21 +291,21 @@ chmod 644 "$SAMBA_DEST_DIR/hifi-shares.conf"
 log "Injecting python daemons → includes.chroot/usr/local/bin"
 BIN_DEST="$CONFIG/includes.chroot/usr/local/bin"
 mkdir -p "$BIN_DEST"
-cp -f "$REPO_ROOT/api_server.py"      "$BIN_DEST/"
-cp -f "$REPO_ROOT/vu_meter_daemon.py" "$BIN_DEST/"
-cp -f "$REPO_ROOT/sources_server.py"  "$BIN_DEST/"
-cp -f "$REPO_ROOT/webui_server.py"    "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_logging.py"    "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_backup.py"     "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_i18n.py"       "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_metadata.py"   "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_tags.py"       "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_squeezelite.py" "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_cdrip.py"      "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_signal_path.py" "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_diskguard.py"  "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_system_tweaks.py" "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_recommend.py"  "$BIN_DEST/"
+cp -f "$CORE/api_server.py"      "$BIN_DEST/"
+cp -f "$CORE/vu_meter_daemon.py" "$BIN_DEST/"
+cp -f "$CORE/sources_server.py"  "$BIN_DEST/"
+cp -f "$CORE/webui_server.py"    "$BIN_DEST/"
+cp -f "$CORE/hifi_logging.py"    "$BIN_DEST/"
+cp -f "$CORE/hifi_backup.py"     "$BIN_DEST/"
+cp -f "$CORE/hifi_i18n.py"       "$BIN_DEST/"
+cp -f "$CORE/hifi_metadata.py"   "$BIN_DEST/"
+cp -f "$CORE/hifi_tags.py"       "$BIN_DEST/"
+cp -f "$CORE/hifi_squeezelite.py" "$BIN_DEST/"
+cp -f "$CORE/hifi_cdrip.py"      "$BIN_DEST/"
+cp -f "$CORE/hifi_signal_path.py" "$BIN_DEST/"
+cp -f "$CORE/hifi_diskguard.py"  "$BIN_DEST/"
+cp -f "$CORE/hifi_system_tweaks.py" "$BIN_DEST/"
+cp -f "$CORE/hifi_recommend.py"  "$BIN_DEST/"
 sed -i 's/\r$//' "$BIN_DEST/api_server.py" "$BIN_DEST/vu_meter_daemon.py" "$BIN_DEST/sources_server.py" "$BIN_DEST/webui_server.py" "$BIN_DEST/hifi_logging.py" "$BIN_DEST/hifi_backup.py" "$BIN_DEST/hifi_i18n.py" "$BIN_DEST/hifi_metadata.py" "$BIN_DEST/hifi_tags.py" "$BIN_DEST/hifi_squeezelite.py" "$BIN_DEST/hifi_cdrip.py" "$BIN_DEST/hifi_signal_path.py" "$BIN_DEST/hifi_diskguard.py" "$BIN_DEST/hifi_system_tweaks.py"
 sed -i 's/\r$//' "$BIN_DEST/hifi_recommend.py"
 chmod +x "$BIN_DEST/api_server.py" "$BIN_DEST/vu_meter_daemon.py" "$BIN_DEST/sources_server.py" "$BIN_DEST/webui_server.py"
@@ -357,7 +360,7 @@ unset REC_KEY
 # daemon's built-in fallback page instead of the real web-admin, silently and
 # with nothing in the ISO itself to show for it. Fail the build instead of
 # shipping that — build it first with (cd admin-webui && npm ci && npm run build).
-WEBUI_DIST_SRC="$REPO_ROOT/admin-webui/dist"
+WEBUI_DIST_SRC="$CORE/admin-webui/dist"
 WEBUI_DIST_DEST="$CONFIG/includes.chroot/opt/hifi-webui/dist"
 if [ -f "$WEBUI_DIST_SRC/index.html" ]; then
     mkdir -p "$WEBUI_DIST_DEST"
@@ -375,7 +378,7 @@ fi
 #   (cd native-ui-np && OSMIUM=$PWD/.. bash scripts/build-np.sh)
 NP_DEST="$CONFIG/includes.chroot/opt/hifi-np"
 if [ -z "$NP_DIR" ]; then
-    for c in "$REPO_ROOT/npout" "$REPO_ROOT/native-ui-np/build/np" "$NP_DEST"; do
+    for c in "$REPO_ROOT/npout" "$CORE/native-ui-np/build/np" "$NP_DEST"; do
         [ -f "$c/index.html" ] && NP_DIR="$c" && break
     done
 fi
