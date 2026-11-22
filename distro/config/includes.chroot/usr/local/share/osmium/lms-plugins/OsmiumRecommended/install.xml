@@ -2,8 +2,9 @@
 <extension>
 	<name>PLUGIN_OSMIUMRECOMMENDED</name>
 	<module>Plugins::OsmiumRecommended::Plugin</module>
-	<version>0.1.0</version>
+	<version>0.1.1</version>
 	<description>PLUGIN_OSMIUMRECOMMENDED_DESC</description>
+	<icon>plugins/OsmiumRecommended/html/icon.png</icon>
 	<creator>Osmium Sound</creator>
 	<email>support@osmium.audio</email>
 	<defaultState>enabled</defaultState>

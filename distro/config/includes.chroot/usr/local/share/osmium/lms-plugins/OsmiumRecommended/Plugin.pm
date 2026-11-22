@@ -47,18 +47,22 @@ my $log = Slim::Utils::Log->addLogCategory({
 sub initPlugin {
 	my $class = shift;
 
+	# Live in the "My Music" group (node => 'myMusic'), not in "My Apps":
+	# the box computes these offline from the user's own library/plays, so they
+	# belong with the music, and Material Skin then shows the entry there on its
+	# own — no manual home-menu customization needed. (is_app would force the
+	# apps menu and ignore the node.)
 	$class->SUPER::initPlugin(
 		feed   => \&feed,
 		tag    => 'osmiumrecommended',
-		menu   => 'apps',
-		is_app => 1,
-		weight => 1,
+		node   => 'myMusic',
+		weight => 80,
 	);
 }
 
 sub getDisplayName { 'PLUGIN_OSMIUMRECOMMENDED' }
 
-# Home-screen app: no player context required to open it.
+# No per-player (classic Squeezebox) menu entry: this is a My Music web item.
 sub playerMenu { }
 
 sub feed {
