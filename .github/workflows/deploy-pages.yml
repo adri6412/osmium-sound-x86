@@ -3,9 +3,8 @@ name: Deploy website to Cloudflare Pages
 # Every deployment is built from scratch, so a file taken out of website/
 # disappears from the site too. What the site serves:
 #   - website/ from main (functions/ becomes the Pages Functions);
-#   - ota/ and fdroid/ from the gh-pages branch, where build-ui-ota.yml and
-#     build-companion-apk.yml keep writing them. gh-pages is only their
-#     store now: Cloudflare no longer builds from it.
+#   - ota/ from the gh-pages branch, where build-ui-ota.yml keeps writing it.
+#     gh-pages is only its store now: Cloudflare no longer builds from it.
 # 🚨 Devices read their update manifest from
 # osmium-sound.pages.dev/ota/latest-<channel>.json (api_server.py,
 # OTA_MANIFEST_BASE), so the ota/ files must be in every deployment.
@@ -14,14 +13,12 @@ on:
     branches: [main]
     paths:
       - 'website/**'
-  # After a release or a companion build has written ota/ or fdroid/ to
-  # gh-pages. 🚨 Kept as a fallback only: GitHub emits no workflow_run for a
-  # run on a tag ref, and those builds run on tags. build-ui-ota.yml and
-  # build-companion-apk.yml start this workflow themselves (deploy-site job).
+  # After a release has written ota/ to gh-pages. 🚨 Kept as a fallback only:
+  # GitHub emits no workflow_run for a run on a tag ref, and those builds run on
+  # tags. build-ui-ota.yml starts this workflow itself (deploy-site job).
   workflow_run:
     workflows:
       - Build HiFi Player OTA bundles (UI + system)
-      - Build Osmium Sound Companion APK
     types: [completed]
   workflow_dispatch:
 
@@ -49,7 +46,6 @@ jobs:
           path: gh-pages
           sparse-checkout: |
             ota
-            fdroid
           sparse-checkout-cone-mode: true
 
       - name: Assemble the site
@@ -58,14 +54,12 @@ jobs:
           mkdir site
           # functions/ is code for Pages Functions, not a page to serve
           rsync -a --exclude functions/ main/website/ site/
-          for d in ota fdroid; do
-            if [ -e "site/$d" ]; then
-              echo "::error::website/$d would hide the $d/ published on gh-pages"
-              exit 1
-            fi
-            cp -a "gh-pages/$d" "site/$d"
-          done
-          ls site/ota/latest-prod.json site/fdroid/repo/index-v2.json
+          if [ -e "site/ota" ]; then
+            echo "::error::website/ota would hide the ota/ published on gh-pages"
+            exit 1
+          fi
+          cp -a "gh-pages/ota" "site/ota"
+          ls site/ota/latest-prod.json
           echo "files: $(find site -type f | wc -l)"
 
       - uses: actions/setup-node@v6

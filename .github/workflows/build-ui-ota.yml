@@ -24,7 +24,6 @@ jobs:
   # toolchain) e, dopo il primo run, riparte veloce.
   np-payload:
     runs-on: ubuntu-24.04
-    if: ${{ !contains(github.ref, 'companion') }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -63,9 +62,6 @@ jobs:
     # Without this a hung step (an apt mirror that never answers, say) keeps the
     # job alive for the 6h default instead of failing fast enough to rerun.
     timeout-minutes: 30
-
-    # Skip if this is a companion app release tag
-    if: ${{ !contains(github.ref, 'companion') }}
 
     steps:
       - name: Checkout repository
@@ -609,24 +605,6 @@ jobs:
             "${{ steps.changelog.outputs.file }}"
           echo "channel=$CH" >> "$GITHUB_OUTPUT"
 
-      # Commits the manifest to the gh-pages branch — despite the action's
-      # name this is just a git push, not a GitHub Pages deploy. The deploy-site
-      # job at the end puts it on Cloudflare Pages (osmium-sound.pages.dev,
-      # OTA_MANIFEST_BASE in api_server.py).
-      # Il manifest è ciò che l'apparecchio legge davvero, quindi non deve
-      # nominare una release che ancora non esiste: per i tag che avranno
-      # un'immagine lo pubblica il lavoro finale, insieme alla release. Qui
-      # resta solo per i companion, che un'immagine non ce l'hanno.
-      - name: Push OTA manifest to gh-pages branch
-        if: ${{ github.ref_type == 'tag' && contains(github.ref_name, 'companion') }}
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./manifest-out
-          publish_branch: gh-pages
-          destination_dir: ota
-          keep_files: true          # don't wipe fdroid/ and the other channels
-
       - name: Upload artifact (manual runs)
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
@@ -651,7 +629,6 @@ jobs:
   image:
     runs-on: ubuntu-latest
     needs: [build-ui-ota, np-payload]
-    if: ${{ !contains(github.ref, 'companion') }}
     timeout-minutes: 120
     defaults:
       run:
@@ -728,17 +705,14 @@ jobs:
   publish-image:
     runs-on: ubuntu-latest
     needs: [build-ui-ota, image]
-    # Gira anche quando l'immagine è stata saltata — i tag del companion non ne
-    # hanno una — perché da qui in poi questo è l'UNICO punto che pubblica: se
-    # non girasse, quelle release non nascerebbero affatto. Non gira invece se
-    # l'immagine è FALLITA: una release a metà non deve esistere.
-    if: ${{ always() && github.ref_type == 'tag' && needs.build-ui-ota.result == 'success' && (needs.image.result == 'success' || needs.image.result == 'skipped') }}
+    # Questo è l'UNICO punto che pubblica la release: se non girasse, quelle
+    # release non nascerebbero affatto. Non gira invece se l'immagine è
+    # FALLITA: una release a metà non deve esistere.
+    if: ${{ always() && github.ref_type == 'tag' && needs.build-ui-ota.result == 'success' && needs.image.result == 'success' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
-        # assente sui tag del companion, dove il lavoro dell'immagine non gira
-        continue-on-error: true
         with:
           name: ab-image
           path: .
@@ -913,7 +887,7 @@ jobs:
   verify-release:
     runs-on: ubuntu-latest
     needs: [build-ui-ota, image, publish-image]
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && !contains(github.ref, 'companion') }}
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Both the old and the new devices must find their update
         env:
@@ -1011,7 +985,7 @@ jobs:
   # the previous, working one of its channel away.
   prune-ota-r2:
     needs: verify-release
-    if: ${{ needs.verify-release.result == 'success' && !contains(github.ref, 'companion') }}
+    if: ${{ needs.verify-release.result == 'success' }}
     uses: ./.github/workflows/prune-ota-r2.yml
     with:
       keep: ${{ github.ref_name }}
