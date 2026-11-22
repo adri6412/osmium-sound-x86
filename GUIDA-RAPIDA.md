@@ -7,7 +7,7 @@ Come installare e iniziare a usare Osmium Sound sul tuo mini-PC x86.
 ## 🚀 Installazione
 
 1. **Procurati l'immagine di installazione.** Scarica l'ultima ISO da
-   [github.com/adri6412/osmium-sound/releases](https://github.com/adri6412/osmium-sound/releases)
+   [github.com/adri6412/osmium-sound-x86/releases](https://github.com/adri6412/osmium-sound-x86/releases)
    e scrivila su una chiavetta USB da 8&nbsp;GB o più con
    [balenaEtcher](https://etcher.balena.io/), Rufus o `dd`, oppure usa
    **Osmium Flasher** (app desktop per Windows/Linux, vedi
@@ -172,7 +172,7 @@ memorizzati, poi riavvia tornando alla configurazione del primo avvio.
 - **[README.md](README.md)**: panoramica, funzioni e specifiche
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**: dettagli tecnici, API, sviluppo locale
 - **[Manuale utente](https://osmiumsound.it/manual.html)** sul sito
-- Note di rilascio: in ogni [Release GitHub](https://github.com/adri6412/osmium-sound/releases) e nella schermata Aggiornamenti ("novità")
+- Note di rilascio: in ogni [Release GitHub](https://github.com/adri6412/osmium-sound-x86/releases) e nella schermata Aggiornamenti ("novità")
 
 ---
 

@@ -1,7 +1,7 @@
 # Contributing to Osmium Sound
 
 Thanks for considering a contribution! Pull requests and issues are welcome on
-[GitHub](https://github.com/adri6412/osmium-sound).
+[GitHub](https://github.com/adri6412/osmium-sound-x86).
 
 ## Workflow
 

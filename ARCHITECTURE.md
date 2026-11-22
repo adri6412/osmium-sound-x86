@@ -2081,7 +2081,7 @@ carries it (`0048-lms-skin-assets.sh` is the worked example — see
 ## Project structure
 
 ```
-hifi-media-player/            (GitHub: adri6412/osmium-sound)
+hifi-media-player/            (GitHub: adri6412/osmium-sound-x86)
 ├── native-ui-qt/             # On-screen UI (Qt 6 Quick, eglfs on DRM/KMS) → /opt/hifi-qt
 │   ├── src/                  # C++: main.cpp, Api, Player, VuMeter, LibraryModel, I18n, Sys, Spring, QrCode (qr.c), kmsmode.cpp,
 │   │                         #      remote.cpp (evdev remotes), btghid.cpp (HID-over-GATT bridge), touchwatch.cpp

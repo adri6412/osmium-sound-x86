@@ -5,7 +5,7 @@ repo_description: >
   published from the same source as https://osmium-sound.pages.dev/fdroid/repo but
   ahead of it and NOT tested to the same standard. Add this repo only if you
   want early/unstable builds; leave it out to stay on stable releases only.
-  (https://github.com/adri6412/osmium-sound).
+  (https://github.com/adri6412/osmium-sound-x86).
 
 archive_older: 3
 

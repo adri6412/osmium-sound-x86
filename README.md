@@ -11,7 +11,7 @@ Bit-perfect audio, streaming services, and signed OTA updates — one sleek dark
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green)
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://osmiumsound.it/kofi?from=github)
 
-[**🌐 Website**](https://osmiumsound.it) · [**⬇️ Download**](https://github.com/adri6412/osmium-sound/releases) · [**📱 Android companion**](https://play.google.com/store/apps/details?id=com.osmium.sound.companion) · [**📖 Architecture**](ARCHITECTURE.md)
+[**🌐 Website**](https://osmiumsound.it) · [**⬇️ Download**](https://github.com/adri6412/osmium-sound-x86/releases) · [**📱 Android companion**](https://play.google.com/store/apps/details?id=com.osmium.sound.companion) · [**📖 Architecture**](ARCHITECTURE.md)
 
 <img src="https://osmiumsound.it/screens/02-now-playing-amber.jpg" alt="Osmium Sound — Now Playing" width="640" />
 
@@ -61,7 +61,7 @@ Bit-perfect audio, streaming services, and signed OTA updates — one sleek dark
 
 ## 🚀 Get started
 
-1. **Download** the latest install ISO from the [website](https://osmiumsound.it/#install) or [Releases](https://github.com/adri6412/osmium-sound/releases) (or use **Osmium Flasher**, see `flasher/`, which downloads and verifies the current image for you).
+1. **Download** the latest install ISO from the [website](https://osmiumsound.it/#install) or [Releases](https://github.com/adri6412/osmium-sound-x86/releases) (or use **Osmium Flasher**, see `flasher/`, which downloads and verifies the current image for you).
 2. **Flash** it to an 8GB+ USB stick with [Osmium Flasher](https://osmiumsound.it), [balenaEtcher](https://etcher.balena.io/), Rufus, or `dd`.
 3. **Boot** your x86 mini-PC from the stick — UEFI or legacy BIOS, Secure Boot can stay on — and finish the install from there: pick the disk, confirm, done.
 4. On first boot after install, pick your Wi-Fi on the screen (or just plug in a cable); the screen then shows its own address (`http://<ip>`). Open it on your phone or laptop to finish setup: language, restore-from-backup or fresh start, any required update, device name and mode, audio output, Lyrion (this device, or a server already on your network), web-player look, music services, web-admin account, time zone, music sources, remote control.
@@ -99,7 +99,7 @@ Control Osmium Sound from your phone — browse the library, drive playback and 
 
 ## 🤝 Contributing & support
 
-Contributions are welcome — pull requests and issues are open on [GitHub](https://github.com/adri6412/osmium-sound). First-time contributors are asked to sign the project's [Contributor License Agreement](CLA.md) (a bot guides you through it on your first PR) — see [CONTRIBUTING.md](CONTRIBUTING.md). For questions, open an issue, write to support@osmiumsound.it, or check the docs above.
+Contributions are welcome — pull requests and issues are open on [GitHub](https://github.com/adri6412/osmium-sound-x86). First-time contributors are asked to sign the project's [Contributor License Agreement](CLA.md) (a bot guides you through it on your first PR) — see [CONTRIBUTING.md](CONTRIBUTING.md). For questions, open an issue, write to support@osmiumsound.it, or check the docs above.
 
 If Osmium Sound is useful to you, you can support its development on Ko-fi:
 

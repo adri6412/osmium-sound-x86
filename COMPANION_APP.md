@@ -82,5 +82,5 @@ Based on [android-squeezer](https://github.com/kaaholst/android-squeezer) by Kur
 ## Support
 
 For issues or feature requests, open a GitHub issue at
-[github.com/adri6412/osmium-sound](https://github.com/adri6412/osmium-sound/issues)
+[github.com/adri6412/osmium-sound-x86](https://github.com/adri6412/osmium-sound-x86/issues)
 or write to support@osmiumsound.it.
