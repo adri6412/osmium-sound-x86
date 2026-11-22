@@ -5727,6 +5727,10 @@ _SYSTEM_PROXY_ROUTES = [
     ("/api/system/ota_channel", "POST", "/ota_channel"),
     ("/api/system/audio_devices", "GET", "/audio_devices"),
     ("/api/system/audio_device", "POST", "/set_audio_device"),
+    # I2S HAT / DAC board selection (Raspberry Pi only): writes the boot dtoverlay,
+    # effective on reboot. Separate from the runtime output picker above.
+    ("/api/system/dac_hats", "GET", "/dac_hats"),
+    ("/api/system/dac_hat", "POST", "/set_dac_hat"),
     # Display mode (GUI kiosk <-> headless). Lets a paired companion bring a
     # headless unit back to the on-screen GUI remotely — the only way back when
     # there is no screen. Non-destructive, so the pairing token alone is enough

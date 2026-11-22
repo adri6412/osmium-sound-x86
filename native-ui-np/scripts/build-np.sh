@@ -14,15 +14,18 @@
 #     app.pack.N          its QML (NP-patched), icons, VU looks, translations, fonts
 #
 #   OSMIUM     the Osmium checkout to build the interface from; defaults to the
-#              sibling hifi-media-player working tree (the device's real code),
-#              so the build tracks what actually ships, not the demo's pinned SHA.
+#              directory that contains this native-ui-np (the parent dir), which
+#              is the Osmium source root in both layouts — this interface nested
+#              in the image repo today, and the shared `core/` submodule after
+#              the split — so the build always tracks the code it ships beside,
+#              not the demo's pinned SHA. Override OSMIUM only to build elsewhere.
 #   TOOLCHAIN  see scripts/build-qt.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 OUT=build/np
 export HIFI_NP_BUILD=1
-export OSMIUM=${OSMIUM:-$(cd "$ROOT/../hifi-media-player" && pwd)}
+export OSMIUM=${OSMIUM:-$(cd "$ROOT/.." && pwd)}
 echo "== Osmium (Now Playing build): $OSMIUM"
 
 rm -rf "$OUT"

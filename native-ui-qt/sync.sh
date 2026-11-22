@@ -3,12 +3,21 @@
 # di produzione). Gli asset e le traduzioni sono quelli gia' installati in
 # /opt/hifi-native-ui, condivisi con la UI in C.
 set -euo pipefail
-HOST=${HOST:-192.168.0.133}
+# Target dev box — no baked-in address or password (this ships in the shared
+# core). Set HOST (required); USER_SSH defaults to the login name. PASS is
+# optional: leave it unset to authenticate with your SSH key/agent (preferred);
+# set it only on a throwaway box without keys, and it is read from the
+# environment, never hardcoded here.
+HOST=${HOST:?set HOST to the target box, e.g. HOST=192.168.0.x ./sync.sh}
 USER=${USER_SSH:-ssh}
-PASS=${PASS:-ssh123456}
+PASS=${PASS:-}
 DEST=/home/ssh/native-ui-qt
 SSHOPT="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=10"
-if command -v sshpass >/dev/null 2>&1; then
+if [ -z "$PASS" ]; then
+    # Key / agent auth: no password handling at all.
+    RSH() { ssh $SSHOPT "$@"; }
+    RCP() { scp $SSHOPT -q "$@"; }
+elif command -v sshpass >/dev/null 2>&1; then
     RSH() { sshpass -p "$PASS" ssh $SSHOPT "$@"; }
     RCP() { sshpass -p "$PASS" scp $SSHOPT -q "$@"; }
 else
