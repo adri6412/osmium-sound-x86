@@ -861,24 +861,22 @@ jobs:
           commit_message: "ota: manifest ${{ github.ref_name }} (+ immagine RAUC)"
 
   # The manifest is on gh-pages now, but devices read it from Cloudflare Pages
-  # (OTA_MANIFEST_BASE), which only changes when deploy-pages.yml runs.
-  # 🚨 deploy-pages.yml also listens to workflow_run of this workflow, and that
-  # never fires here: GitHub emits no workflow_run for a run on a tag ref, and
-  # every release is one. v2.5.26-dev.1-alpha4 reached gh-pages and R2 and
-  # stayed invisible to the devices until a hand-run deploy. So this run asks
-  # for the deploy itself; GITHUB_TOKEN may start a workflow_dispatch.
+  # (OTA_MANIFEST_BASE). The site (and that Pages deploy) now lives in the
+  # adri6412/osmium-sound-site repo, which pulls ota/ from this repo's gh-pages.
+  # 🚨 A release runs on a tag, so it emits no workflow_run the site repo could
+  # listen to; after writing the manifest this run tells the site repo to
+  # redeploy via a repository_dispatch. Needs a PAT (secret SITE_DISPATCH_PAT)
+  # with contents:write on osmium-sound-site — GITHUB_TOKEN cannot reach it.
   deploy-site:
     runs-on: ubuntu-latest
     needs: publish-image
     if: ${{ always() && needs.publish-image.result == 'success' }}
     timeout-minutes: 5
-    permissions:
-      actions: write
     steps:
-      - name: Put the new manifest on Cloudflare Pages
+      - name: Ask osmium-sound-site to redeploy with the new OTA manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run deploy-pages.yml --ref main -R "${{ github.repository }}"
+          GH_TOKEN: ${{ secrets.SITE_DISPATCH_PAT }}
+        run: gh api repos/adri6412/osmium-sound-site/dispatches -f event_type=ota-updated
 
   # 🚨 A release has to serve BOTH worlds, always. We cannot know when a given
   # owner will update, or whether they will have migrated by then: a device
