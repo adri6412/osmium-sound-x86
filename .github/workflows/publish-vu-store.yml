@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v7
         with:
@@ -32,11 +34,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          for d in vu-store/*/; do
+          for d in core/vu-store/*/; do
             [ -f "$d/skin.json" ] || continue
-            python native-ui-qt/tools/vu-skin-build.py pack "$d" --out out
+            python core/native-ui-qt/tools/vu-skin-build.py pack "$d" --out out
           done
-          python native-ui-qt/tools/vu-skin-build.py index out
+          python core/native-ui-qt/tools/vu-skin-build.py index out
           cat out/index.json
 
       - name: Sign the catalogue
