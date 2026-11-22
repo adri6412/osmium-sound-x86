@@ -10,12 +10,11 @@ appliance's OTA release channels. Workflow details are in [README.md](README.md)
 | Appliance (kiosk + system + OS OTA bundles) | `v<MAJOR>.<MINOR>.<PATCH>` | `build-ui-ota.yml` | stable → **prod** channel |
 | Appliance dev build | `v<MAJOR>.<MINOR>.<PATCH>-dev.<N>` | `build-ui-ota.yml` (prerelease) | **dev** channel |
 | Appliance alpha build | `v<MAJOR>.<MINOR>.<PATCH>-dev.<N>-alpha<M>` | `build-ui-ota.yml` (prerelease) | **alpha** channel only |
-| Android companion | `companion-v<MAJOR>.<MINOR>.<PATCH>` | `build-companion-apk.yml` | APK + stable F-Droid repo |
-| Android companion dev build | `companion-v<MAJOR>.<MINOR>.<PATCH>-svil<N>` | `build-companion-apk.yml` (prerelease) | APK + dev F-Droid repo |
 | Install ISO | *(no tag trigger)* | `build-iso.yml` is manual; it takes the appliance tag as an input | ISO attached to that tag's Release |
 
-`build-ui-ota.yml` ignores any tag containing `companion`; `build-companion-apk.yml`
-only fires on `companion-v*`. Tag names are case-sensitive.
+Tag names are case-sensitive. The Android companion app is no longer built here —
+it has its own repo, [`adri6412/osmium-companion-android`](https://github.com/adri6412/osmium-companion-android),
+with its own `companion-v*` tags, APK Release and F-Droid repo.
 
 ## Branches & OTA channels
 
@@ -45,8 +44,8 @@ only fires on `companion-v*`. Tag names are case-sensitive.
   as root — deliberately not reachable via the network API). Once a fix is
   validated on `alpha`, merge/cherry-pick it into `svil` and cut the next real
   `v2.5.21-dev.119` there for the shared dev channel.
-- **`gh-pages`** is generated (`ota/` manifests, `fdroid/` repos; the website
-  is deployed from `main` by `deploy-pages.yml`) — never edit it by hand.
+- **`gh-pages`** is generated (`ota/` manifests; the website is deployed from
+  `main` by `deploy-pages.yml`) — never edit it by hand.
 
 Promotion: PR `svil` → `main`, then tag a stable `vX.Y.Z` on `main`.
 
@@ -107,25 +106,15 @@ Release titles are the bare tag (`v2.5.22`), and the body is the auto-generated
 
 ### Companion app release (Android)
 
-```bash
-# 1. Update versionCode (+1) and versionName in
-#    android-companion/HiFiMediaPlayer/build.gradle — the versionName must
-#    match a case in publishTrack(), or every Gradle build fails.
-# 2. Test locally
-cd android-companion && bash gradlew clean assembleDebug test lintVitalRelease
-# 3. Commit, then tag WITH the companion prefix:
-git tag -a companion-v1.0.8 -m "companion 1.0.8: ..."
-git push origin companion-v1.0.8
-# → build-companion-apk.yml builds + signs the APK, creates the Release,
-#   and (stable tags only) updates the F-Droid repo.
-# Dev builds from svil: companion-v1.0.8-svil1 → prerelease + dev F-Droid repo.
-```
+The companion app now lives in its own repo,
+[`adri6412/osmium-companion-android`](https://github.com/adri6412/osmium-companion-android).
+Cut its `companion-v*` releases there — see that repo's own docs.
 
 ## If you make a mistake
 
 ```bash
-git tag -d companion-v1.0.8              # delete local tag
-git push origin :companion-v1.0.8        # delete remote tag
+git tag -d v2.5.21-dev.119              # delete local tag
+git push origin :v2.5.21-dev.119        # delete remote tag
 # recreate and push again
 ```
 
@@ -135,10 +124,10 @@ workflow run for that tag (`gh run rerun <id>`).
 ## Monitoring
 
 GitHub → Actions → select the workflow → open the run. If a tag didn't trigger
-anything, check that it matches the pattern (`v*` vs `companion-v*`), that it
+anything, check that it matches the pattern (`v*`), that it
 was actually pushed (`git push origin <tag>` — `--tags` pushes everything, avoid
 it), and the workflow's `if:` conditions.
 
 ---
 
-**Last updated:** 2026-08-22
+**Last updated:** 2026-11-22
