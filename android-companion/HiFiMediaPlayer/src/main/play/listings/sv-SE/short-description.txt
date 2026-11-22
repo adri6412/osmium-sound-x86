@@ -1,1 +1,0 @@
-Fjärrkontroll för Lyrion Music Server och spelare.
