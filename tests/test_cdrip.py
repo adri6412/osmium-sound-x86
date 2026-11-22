@@ -153,6 +153,31 @@ class TestTocAndNames(unittest.TestCase):
         self.assertEqual(hcd.safe_name('   ', 'Unknown Album'), 'Unknown Album')
         self.assertEqual(len(hcd.safe_name('x' * 300, 'f')), 120)
 
+    def test_safe_name_keeps_a_title_with_no_latin_form(self):
+        # Folding 坂本龍一 or Кино to ASCII leaves nothing: every such disc
+        # used to become "Unknown Album" and overwrite the previous one.
+        self.assertEqual(hcd.safe_name('坂本龍一', 'Unknown Artist', ascii_only=True), '坂本龍一')
+        self.assertEqual(hcd.safe_name('Кино 2', 'Unknown Album', ascii_only=True), 'Кино 2')
+        self.assertEqual(hcd.safe_name('Sigur Rós', 'x', ascii_only=True), 'Sigur Ros')
+
+    def test_safe_name_fits_ext4_in_bytes(self):
+        name = hcd.safe_name('ベスト' * 100, 'x')
+        self.assertLessEqual(len(name.encode('utf-8')), 200)
+        self.assertTrue(name.startswith('ベスト'))
+        self.assertLessEqual(len(('01 - ' + name + '.flac').encode('utf-8')), 255)
+
+    def test_unused_dir_never_reuses_a_folder_with_music(self):
+        tmp = tempfile.mkdtemp()
+        album = os.path.join(tmp, 'Unknown Artist', 'Unknown Album')
+        self.assertEqual(hcd.unused_dir(album), album)          # not there yet
+        os.makedirs(album)
+        self.assertEqual(hcd.unused_dir(album), album)          # there but empty
+        open(os.path.join(album, '01 - Track 01.flac'), 'wb').close()
+        self.assertEqual(hcd.unused_dir(album), album + ' (2)')
+        os.makedirs(album + ' (2)')
+        open(os.path.join(album + ' (2)', 'x'), 'wb').close()
+        self.assertEqual(hcd.unused_dir(album), album + ' (3)')
+
     def test_wav_crc(self):
         tmp = tempfile.mkdtemp()
         p = os.path.join(tmp, 't.wav')
@@ -236,6 +261,57 @@ class TestWorkerLog(unittest.TestCase):
             'hifi_rip_cd', os.path.join(ROOT, 'distro', 'config', 'includes.chroot', 'usr', 'local', 'sbin', 'hifi-rip-cd.py'))
         cls.rip = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.rip)
+
+    def test_status_lines_carry_a_code(self):
+        status = os.path.join(tempfile.mkdtemp(), 'rip-status.json')
+        with mock.patch.object(self.rip, 'STATUS', status):
+            self.rip.write_status('ripping', 2, 9, 20, self.rip.msg('cdrip.track', num=2, total=9, title='Freddie {x}'))
+            with open(status) as f:
+                st = json.load(f)
+            self.assertEqual((st['code'], st['vars']), ('cdrip.track', {'num': '2', 'total': '9', 'title': 'Freddie {x}'}))
+            self.assertEqual(st['message'], 'Track 2/9: Freddie {x}')
+            self.rip.write_status('error', 0, 0, 0, 'plain text')      # still accepted as it is
+            with open(status) as f:
+                st = json.load(f)
+            self.assertEqual(st['message'], 'plain text')
+            self.assertNotIn('code', st)
+
+    def test_some_tracks_keep_the_discs_numbers(self):
+        """Two tracks of three: each keeps its number on the disc, and
+        TRACKTOTAL is the disc's three, not the two ripped."""
+        tmp = tempfile.mkdtemp()
+        root = os.path.join(tmp, 'music')
+        os.makedirs(root)
+        plan = {'device': '/dev/null', 'root': root, 'artist': 'A', 'album': 'B', 'disc_tracks': 3,
+                'tracks': [{'num': 1, 'title': 'One'}, {'num': 3, 'title': 'Three'}],
+                'options': {'format': 'flac', 'replaygain': False, 'log_file': False, 'eject': False}}
+        plan_path = os.path.join(tmp, 'plan.json')
+        with open(plan_path, 'w') as f:
+            json.dump(plan, f)
+        flacs = []
+
+        def fake_rip(device, num, wav, opt, expected=0, on_progress=None):
+            open(wav, 'wb').close()
+            return {'ok': True, 'crc': 1, 'reads': 1, 'accurate': None}
+
+        def fake_run(cmd, timeout):
+            if cmd[0] == 'flac':
+                flacs.append(cmd)
+                open(cmd[cmd.index('-o') + 1], 'wb').close()
+            return mock.Mock(returncode=0, stdout='', stderr='')
+        r = self.rip
+        with mock.patch.object(r, 'STATUS', os.path.join(tmp, 'status.json')), \
+                mock.patch.object(r, 'read_toc', return_value={1: {'length': 10}, 2: {'length': 10}, 3: {'length': 10}}), \
+                mock.patch.object(r, 'rip_track', side_effect=fake_rip), mock.patch.object(r, 'run', side_effect=fake_run), \
+                mock.patch.object(r, 'place_album'), mock.patch.object(r, 'rip_owner', return_value=None), \
+                mock.patch.object(hcd, 'drive_info', return_value={}), mock.patch.object(hcd, 'hand_over'), \
+                mock.patch.object(r.sys, 'argv', ['hifi-rip-cd.py', plan_path]):
+            r.main()
+        self.assertEqual([[a for a in c if a.startswith(('--tag=TRACKNUMBER', '--tag=TRACKTOTAL'))] for c in flacs],
+                         [['--tag=TRACKNUMBER=1', '--tag=TRACKTOTAL=3'], ['--tag=TRACKNUMBER=3', '--tag=TRACKTOTAL=3']])
+        with open(os.path.join(tmp, 'status.json')) as f:
+            st = json.load(f)
+        self.assertEqual((st['state'], st['total']), ('done', 2))
 
     def test_build_log(self):
         plan = {'artist': 'Miles Davis', 'album': 'Kind of Blue', 'year': '1959', 'discid': '3b0a2c05', 'device': '/dev/sr0',
@@ -481,6 +557,34 @@ class TestApi(unittest.TestCase):
             plan = json.load(f)
         self.assertEqual(plan['root'], self.mount)
 
+    def test_rip_selected_tracks(self):
+        """`selected`: only those of the disc's tracks are ripped, each with
+        its own title and tags, and the plan keeps the disc's track count."""
+        ss = self.ss
+        self._patch('RIP_PLAN', os.path.join(self.tmp, 'rip-plan.json'))
+        self._patch('RIP_COVER', os.path.join(self.tmp, 'rip-cover.jpg'))
+        self._patch('_cd_lookup', lambda toc: None)
+        self._patch('_rip_watcher', lambda: None)
+        self._patch('_ensure_samba_uid_gid', lambda: (1234, 902))
+        toc = {'discid': 'abcd1234', 'ntracks': 3, 'offsets': [150, 20000, 30000], 'total_sec': 600,
+               'lengths': [264, 133, 200], 'leadout': 45000}
+        self._patch('_cd_toc', lambda: toc)
+        picked = os.path.join(self.mount, 'Rips')
+        r = self.client.post('/api/cd/rip', json={'target': picked, 'selected': [1, 3], 'tracks': ['One', 'Two', 'Three']})
+        self.assertEqual(r.status_code, 202, r.get_json())
+        self.assertEqual(r.get_json()['total'], 2)
+        with open(ss.RIP_PLAN) as f:
+            plan = json.load(f)
+        self.assertEqual([(t['num'], t['title']) for t in plan['tracks']], [(1, 'One'), (3, 'Three')])
+        self.assertEqual(plan['disc_tracks'], 3)
+        # nothing ticked, or only numbers the disc does not have: refused
+        for sel in ([], [9], ['x']):
+            with open(ss.RIP_STATUS, 'w') as f:
+                json.dump({'state': 'idle'}, f)
+            r = self.client.post('/api/cd/rip', json={'target': picked, 'selected': sel})
+            self.assertEqual(r.status_code, 400, sel)
+            self.assertEqual(r.get_json()['code'], 'msg.cdNoTracksSelected')
+
     def test_repair_shared_ownership(self):
         """At start, what an earlier server or worker left root-owned under
         the shared folders goes to the share account; the folders themselves,
@@ -552,6 +656,20 @@ class TestApi(unittest.TestCase):
             ss._rip_watcher()
         hot.assert_called_once_with(os.path.dirname(dest), dest, (1234, 902))
 
+    def test_status_in_the_readers_language(self):
+        with open(self.ss.RIP_STATUS, 'w') as f:
+            json.dump({'state': 'ripping', 'track': 3, 'total': 10, 'progress': 25, 'message': 'Track 3/10: Time',
+                       'code': 'cdrip.track', 'vars': {'num': '3', 'total': '10', 'title': 'Time'}}, f)
+        r = self.client.get('/api/cd/rip/status', headers={'X-UI-Lang': 'it'})
+        self.assertEqual(r.get_json()['message'], 'Traccia 3/10: Time')
+        r = self.client.get('/api/cd/rip/status', headers={'X-UI-Lang': 'en'})
+        self.assertEqual(r.get_json()['message'], 'Track 3/10: Time')
+        # an older worker: no code, the line as written
+        with open(self.ss.RIP_STATUS, 'w') as f:
+            json.dump({'state': 'ripping', 'message': 'Traccia 3/10: Time'}, f)
+        r = self.client.get('/api/cd/rip/status', headers={'X-UI-Lang': 'en'})
+        self.assertEqual(r.get_json()['message'], 'Traccia 3/10: Time')
+
     def test_terminal_states(self):
         for state in ('idle', 'done', 'error', 'cancelled'):
             with open(self.ss.RIP_STATUS, 'w') as f:
@@ -560,6 +678,104 @@ class TestApi(unittest.TestCase):
         with open(self.ss.RIP_STATUS, 'w') as f:
             json.dump({'state': 'starting'}, f)
         self.assertTrue(self.ss._rip_running())
+
+
+class TestSystemDiskDestinations(unittest.TestCase):
+    """A player with nothing but its system disk can rip: /data/music and the
+    `local` music folders are destinations, and the rip lands in the library."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        os.environ.setdefault('HIFI_META_CACHE_DIR', os.path.join(cls.tmp, 'cache'))
+        os.environ.setdefault('HIFI_META_ETC_DIR', cls.tmp)
+        with mock.patch('hifi_logging.tee_stdio_to_file'):
+            import sources_server
+        cls.ss = sources_server
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.data = os.path.join(self.tmp, 'data')
+        self.music = os.path.join(self.data, 'music')
+        self.rock = os.path.join(self.music, 'Rock')
+        os.makedirs(self.rock)
+        self._saved = {}
+        self._patch('STATE_FILE', os.path.join(self.tmp, 'sources.json'))
+        self._patch('DATA_MNT', self.data)
+        self._patch('DATA_MUSIC_ROOT', self.music)
+        self._patch('ALLOWED_LOCAL_ROOTS', (self.music,))
+        self._patch('_mount_table', lambda: {})
+        self.lyrion = []
+        self._patch('_lyrion_push_live', lambda drop_roots=(), add_paths=(): self.lyrion.append(list(add_paths)))
+        real_ismount = os.path.ismount
+        self._ismount = mock.patch('os.path.ismount', lambda p: p == self.data or real_ismount(p))
+        self._ismount.start()
+
+    def tearDown(self):
+        self._ismount.stop()
+        for k, v in self._saved.items():
+            setattr(self.ss, k, v)
+
+    def _patch(self, name, value):
+        self._saved[name] = getattr(self.ss, name)
+        setattr(self.ss, name, value)
+
+    def _state(self, sources):
+        self.ss.save_state({'sources': sources})
+
+    def test_system_music_with_no_sources(self):
+        self._state([])
+        out = self.ss._rip_writable_sources()
+        self.assertEqual([(s['id'], s['mountpoint']) for s in out], [(self.ss.RIP_SYSTEM_ID, self.music)])
+        mp, src, real = self.ss._cd_target_root(self.rock)
+        self.assertEqual((mp, src['id'], real), (self.music, self.ss.RIP_SYSTEM_ID, self.rock))
+
+    def test_no_data_partition_no_system_entry(self):
+        self._state([])
+        self._ismount.stop()
+        self._ismount = mock.patch('os.path.ismount', return_value=False)
+        self._ismount.start()
+        self.assertEqual(self.ss._rip_writable_sources(), [])
+
+    def test_local_folders_innermost_first(self):
+        self._state([{'id': 'local-Rock', 'type': 'local', 'name': self.rock, 'path': self.rock},
+                     {'id': 'local-pl', 'type': 'local', 'name': self.music, 'path': self.music, 'media': False},
+                     {'id': 'local-out', 'type': 'local', 'name': '/etc', 'path': '/etc'}])
+        out = self.ss._rip_writable_sources()
+        # the playlist-only entry and the folder outside the allowed roots are not offered
+        self.assertEqual(sorted(s['id'] for s in out), sorted(['local-Rock', self.ss.RIP_SYSTEM_ID]))
+        _mp, src, _real = self.ss._cd_target_root(os.path.join(self.rock))
+        self.assertEqual(src['id'], 'local-Rock')
+        _mp, src, _real = self.ss._cd_target_root(self.music)
+        self.assertEqual(src['id'], self.ss.RIP_SYSTEM_ID)
+
+    def test_system_music_listed_once_when_added(self):
+        self._state([{'id': 'local-music', 'type': 'local', 'name': self.music, 'path': self.music}])
+        self.assertEqual([s['id'] for s in self.ss._rip_writable_sources()], ['local-music'])
+
+    def test_rip_into_library(self):
+        self._state([{'id': 'local-Rock', 'type': 'local', 'name': self.rock, 'path': self.rock}])
+        self.ss._rip_into_library(os.path.join(self.rock))           # held already
+        self.assertEqual(self.lyrion, [])
+        self.ss._rip_into_library(self.music)                         # not yet: added
+        self.assertEqual(self.lyrion, [[self.music]])
+        paths = [s['path'] for s in self.ss.load_state()['sources']]
+        self.assertEqual(paths, [self.rock, self.music])
+        self.ss._rip_into_library(self.music)                         # once only
+        self.assertEqual(len(self.ss.load_state()['sources']), 2)
+        self.ss._rip_into_library('/etc')                             # never outside the roots
+        self.assertEqual(len(self.ss.load_state()['sources']), 2)
+
+    def test_ripped_album_not_listed_beside_its_disk(self):
+        ss = self.ss
+        calls = []
+        self._patch('_lyrion_request', lambda cmd: calls.append(cmd) or {'_p2': [self.music + '/']})
+        self._patch('_lyrion_rescan', lambda: calls.append(['rescan']))
+        ss._lyrion_add_mediadir_live(os.path.join(self.music, 'Artist', 'Album'))
+        self.assertEqual(calls, [['pref', 'mediadirs', '?'], ['rescan']])
+        calls.clear()
+        ss._lyrion_add_mediadir_live('/mnt/hifi-usb/x')
+        self.assertIn(['pref', 'mediadirs', [self.music + '/', '/mnt/hifi-usb/x']], calls)
 
 
 if __name__ == '__main__':

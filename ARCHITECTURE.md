@@ -49,7 +49,7 @@ flowchart TB
 | Component | Path | Role |
 |---|---|---|
 | On-screen UI — C++ core | `native-ui-qt/src/` | `hifi-qt`, the touchscreen UI since v2.5.24: a Qt 6 Quick application that draws straight to the panel through Qt's eglfs platform on DRM/KMS — no X server, no Wayland compositor, no LightDM. `main.cpp` sets the video mode (`kmsmode.cpp`, from `/etc/hifi-player/ui-resolution`) and loads the QML; the objects it exposes are `Api` (async HTTP to the local services via `QNetworkAccessManager`, Lyrion JSON-RPC included), `Player` (Lyrion `status`/playerprefs polling and playback commands), `VuMeter` (WebSocket client of `vu_meter_daemon.py`, needle spring), `LibraryModel` (the browser lists), `I18n` and `Sys` (small files under `/etc/hifi-player`, pointer), plus the `Spring` and `QrCode` QML types. `remote.cpp` reads remote controls through evdev (an exclusive grab of real remotes only; the media keys of a keyboard or a sound card are passed on as keys, not as a remote), `btghid.cpp` is a HID-over-GATT bridge to `/dev/uhid`, in its own thread, for Bluetooth remotes whose report map the kernel rejects, and `touchwatch.cpp` watches the USB touchscreen for the freezes some panels have and writes its state to `/run/hifi-touch.json`. Only UI-local preferences (language, Now Playing view, update auto-check) are written directly; **system control goes through `api_server.py`**. Installed at `/opt/hifi-qt`, run by `hifi-qt.service`. Chosen over Electron for its footprint: on the reference mini PC, Now Playing with the VU meters at 720p measured about 3.3 W / ~175 MB RSS versus 4.9 W / ~653 MB. |
-| On-screen UI — QML | `native-ui-qt/qml/` | `Main.qml` scales the logical canvas to the real mode (600 points tall and wider on a 16:9 panel — 1067x600 — or 1024 wide and taller on a 16:10 one — 1024x640 — clamped between 3:2 and 16:9, `Theme.canvasW/H`), `App.qml` stacks the screens and shared overlays: `MainScreen.qml` (mini player + `Browser.qml` library/radio/apps, `DiscoverTab.qml`), `NowPlaying.qml` (with `VuPanel.qml`, `NpAnimation.qml` and its scenes `AnimCd.qml`/`AnimCdFront.qml`/`AnimVinyl.qml`/`AnimCassette.qml`, `NpStage.qml` for full screen, `NpChooser.qml` the look/animation chooser, `LedBar.qml`, `Lyrics.qml`), `CoverFlow.qml` (the album list's second view), `SettingsTab.qml` + `SettingsRows.qml`, `Wizard.qml` (first-boot setup and installer screens), `Dialogs.qml`, `VirtualKeyboard.qml`, `OtaOverlay.qml`, `CdRip.qml`, `FolderChooser.qml`, `Screensaver.qml`, `BrandMark.qml` (the Osmium Sound mark, drawn in DejaVu Sans rather than shown as a picture), `Tutorial.qml` (the guided tour, once after setup; `/data/hifi-tutorial-shown`), `Nav.qml`/`NavRing.qml`/`NavScope.qml` (the remote's spatial navigation: a gold ring, OK taps its centre through `Sys.tapAt`), `RemotePairWizard.qml`, `RemoteIntro.qml`, `RemoteTour.qml`, … Strings come from the same `src/i18n/locales/{en,it}.json` (copied to `/opt/hifi-qt/locales`), English default; the third-party notices from `third_party.json`, generated from `src/data/thirdPartyNotices.js`. |
+| On-screen UI — QML | `native-ui-qt/qml/` | `Main.qml` scales the logical canvas to the real mode (600 points tall and wider on a 16:9 panel — 1067x600 — or 1024 wide and taller on a 16:10 one — 1024x640 — clamped between 3:2 and 16:9, `Theme.canvasW/H`), `App.qml` stacks the screens and shared overlays: `MainScreen.qml` (mini player + `Browser.qml` library/radio/apps, `DiscoverTab.qml`), `NowPlaying.qml` (with `VuPanel.qml`, `NpAnimation.qml` and its scenes `AnimCd.qml`/`AnimCdFront.qml`/`AnimChanger.qml`/`AnimVinyl.qml`/`AnimCassette.qml`, `NpStage.qml` for full screen, `NpChooser.qml` the look/animation chooser, `LedBar.qml`, `Lyrics.qml`), `CoverFlow.qml` (the album list's second view), `ChangerView.qml` (its third: the albums as discs put one by one into the CD changer, then played one after the other — `App.changerLoad`, the discs in `changer-discs`, the Now Playing at full screen on the changer whatever animation is chosen; an app's album, Qobuz or Spotify, goes in from its long-press menu, `App.changerPut`, by its favourites URL), `SettingsTab.qml` + `SettingsRows.qml`, `Wizard.qml` (first-boot setup and installer screens), `Dialogs.qml`, `VirtualKeyboard.qml`, `OtaOverlay.qml`, `CdRip.qml`, `FolderChooser.qml`, `Screensaver.qml`, `BrandMark.qml` (the Osmium Sound mark, drawn in DejaVu Sans rather than shown as a picture), `Tutorial.qml` (the guided tour, once after setup; `/data/hifi-tutorial-shown`), `Nav.qml`/`NavRing.qml`/`NavScope.qml` (the remote's spatial navigation: a gold ring, OK taps its centre through `Sys.tapAt`), `RemotePairWizard.qml`, `RemoteIntro.qml`, `RemoteTour.qml`, … Strings come from the same `src/i18n/locales/{en,it}.json` (copied to `/opt/hifi-qt/locales`), English default; the third-party notices from `third_party.json`, generated from `src/data/thirdPartyNotices.js`. |
 | Shared interface data | `src/i18n/locales/`, `src/data/thirdPartyNotices.js` | The on-screen strings (en/it) and the third-party notices, read by `native-ui-qt/ci/build-payload.sh`. All that is left of the earlier Electron kiosk, removed on 2026-10-02 |
 | Flask API | `api_server.py` | Runs as root on the appliance; system info/control, network/Wi-Fi, OTA channels, multiroom (LMS role), pairing tokens, display mode, player on/off, disk installer. Loopback-only, port `8000`. |
 | Sources service | `sources_server.py` | USB/SMB/local source management, internal-disk adoption/formatting, Samba share config, audio-CD ripping, backup/restore (core logic shared via `hifi_backup.py`), and every piece of Lyrion-side configuration the appliance owns for the user (web-UI skin, first-run setup/plugins, media + playlist folders — see [Lyrion web UI](#lyrion-web-ui--osmium-skin--first-run-setup)). Binds `0.0.0.0:8080` — LAN-reachable like the web admin, but every route is gated by a pairing token (see [Pairing & security](#pairing--security)), which is what lets the Android companion talk to it directly. |
@@ -85,9 +85,9 @@ flowchart TB
 | `hifi-memlog.timer` → `hifi-memlog` | `hifi-memlog.sh` | Every 5 minutes: memory, swap, pressure and the biggest processes into `/var/log/hifi/memory.log`, for the support bundle |
 | `hifi-kiosk-session` | `hifi-kiosk-session.sh` | Legacy Electron installs only, shipped by OS update (`apply.d/0050`), never in the image. Oneshot before LightDM: decides Wayland (labwc) vs X11 for the kiosk session and writes LightDM's `user-session` accordingly — see [The earlier Electron kiosk](#the-earlier-electron-kiosk) |
 | `hifi-update-stage-resume` / `hifi-update-apply` | `hifi-update-stage-runner.sh` / `hifi-update-apply-runner.sh` | Resume an interrupted staging; apply staged bundles inside `system-update.target` — see [OTA update system](#ota-update-system) |
-| `hifi-backup.timer` + `.service` | `hifi-backup-run.py --scheduled` | Weekly profile backup when enabled in Settings (shipped by `apply.d/0033`) |
+| `hifi-backup.timer` + `.service` | `hifi-backup-run.py --scheduled` | Weekly profile backup when enabled in Settings (shipped in the image; `apply.d/0033` for older installs) |
 | `hifi-mdns-keepalive.timer` | `hifi-mdns-keepalive.sh` | Periodic mDNS/ARP re-announce so an idle unit stays reachable (`apply.d/0041`) |
-| `hifi-quiesce-audio-shutdown` | `hifi-quiesce-audio-shutdown.sh` | Stops audio before any shutdown/reboot (DesignWare DMA panic workaround, `apply.d/0027`) |
+| `hifi-playback-quiesce` | `hifi-quiesce-audio-shutdown.sh` (ExecStop) | Stops audio before any shutdown/reboot (DesignWare DMA panic workaround, `apply.d/0027`) |
 | `squeezelite` | — | Lyrion's player client (options rendered from `squeezelite.json` by `hifi_squeezelite.py apply`, `-v` visualizer export, persistent `-m` player MAC) |
 | `systemd-timesyncd` | — | The clock from the network; the image build refuses an image without it (a mini PC's RTC alone drifts or is not set) |
 | `systemd-oomd` | — | When memory runs out (swap/zram nearly full, or pressure above 50 % for 20 s on `system.slice`) it kills and restarts the service using the most, instead of the box freezing; squeezelite and the Bluetooth players opt out |
@@ -213,7 +213,9 @@ overwrite (an explicit, rare action, unlike backup), takes an automatic
 "pre-restore" safety generation first, and restarts only the services whose
 files actually changed.
 
-Scheduling (`hifi-backup.timer`, weekly, `Persistent=false`) ships via
+Scheduling (`hifi-backup.timer`, weekly, `Persistent=false`) ships in the
+image (enabled; the worker exits at once unless backup.json says scheduled)
+and, for older installs, via
 `distro/os-update/apply.d/0033-backup-scheduler.sh`: the unit is installed
 disabled and reconciled against the user's choice in
 `/etc/hifi-player/backup.json` on every OS update. A factory reset
@@ -226,6 +228,88 @@ Both the sources SPA (`:8080`, phone/QR flow — `GET/POST /api/backup*`,
 session-gated forward in `webui_server.py`) expose the same feature; the plain
 `GET /api/backup` link (no passphrase — an `<a href>` can't send one) stays
 the always-available "just get me a file" path used by both UIs.
+
+## Recommended albums
+
+A **Recommended** tile in the kiosk's Music tab opens a grid of albums that
+play at one touch. The list is computed by a scheduled job, never while the
+screen is open: the kiosk only reads a table. Everything is in
+`hifi_recommend.py` (numpy + stdlib; onnxruntime optional), tested by
+`tests/test_recommend.py`.
+
+**Pipeline** (`run()`):
+
+1. **Plays** — a thread in `api_server.py` (`_recommend_collector`) polls the
+   device's own player every 20 s and records a play once a track was heard
+   for 30 s or half its length. It works with an external Lyrion and with
+   streaming. Table `plays`.
+2. **Taste weights** — per artist, the sum of plays decayed with a 90-day
+   half-life, **plus the local library**: each album owned adds 0.25, up to
+   four albums per artist (`library_weights`). A library of ten albums is
+   enough to compute a list with no plays at all; below that the job waits
+   for 20 plays (`few_plays`). **The streaming accounts count too**
+   (`account_taste`): favourite albums are counted with the owned ones,
+   each artist followed adds 0.5, and Deezer's listening history adds 0.5
+   per track (ten per artist at most; the plugin gives no dates). They are
+   read from the plugins' own menus through Lyrion, located by the menu's
+   string tokens (`getstring`), never from the services directly. Qobuz,
+   TIDAL and Spotify expose no listening history through their plugins.
+3. **Enrichment** — genres, tags and related artists per artist, through
+   `hifi_metadata.HttpClient` (one User-Agent, one rate limit, the `meta-online`
+   switch): Wikidata and MusicBrainz core data always; MusicBrainz genres/tags
+   and Last.fm only behind `NONCOMMERCIAL_SOURCES`. Cached in the database for
+   90 days, at most 120 new artists per run.
+4. **Vectors** — one short text per artist/album ("artist; genres; decade;
+   related…") embedded with all-MiniLM-L6-v2 (ONNX, int8, 64 tokens, own
+   WordPiece tokenizer), cached by text hash. Without onnxruntime or the model
+   the same pipeline runs on TF-IDF tag vectors (`mode` = `onnx` | `tfidf`).
+5. **Profile** — weighted k-means, k from 1 to 5 by silhouette.
+6. **Candidates** — unheard albums of the library, and albums found by
+   searching each signed-in streaming plugin (Qobuz, Tidal, Spotty, Deezer)
+   through Lyrion's JSON-RPC for the top artists and their related names, at
+   most 40 searches per service per run. Heard and dismissed albums are out.
+7. **Ranking** — cosine to the nearest centroid, then MMR (λ 0.7), two albums
+   per artist at most, a quota per cluster; 40 results.
+
+**Storage** — `/var/lib/hifi-player/recommend/recommend.db` (SQLite, WAL):
+`recommendations` (rewritten in one transaction), `plays`, `dismissed`, the
+profile and vector caches, `runs`. Settings in
+`/etc/hifi-player/recommend.json`. Both are in the backup (the database as a
+snapshot) and removed by a factory reset.
+
+**Scheduling** — the device is not a server and is off at night, so the owner
+picks the time. `hifi-recommend.timer` (default every day 18:00,
+`Persistent=true`: a missed run is caught up after the next power-on) starts
+`hifi-recommend.service` → `hifi-recommend-run.py`, at idle priority with
+`MemoryMax=900M`. Settings → Recommended writes the drop-in
+`hifi-recommend.timer.d/schedule.conf` through the API (every day / chosen
+days / only by hand, any hour and minute); `api_server` rewrites it at start,
+so a restored backup gets its schedule back. A scheduled run waits while music
+is playing; "Compute now" does not.
+
+**API** (`api_server.py`, proxied by the web admin as `/api/system/…`):
+`GET /recommendations` (state `ok | disabled | few_plays | never_run | empty`,
+`running`, last run, items), `POST /recommendations/dismiss`,
+`POST /recommendations/run`, `GET|POST /recommend_settings`. The Last.fm key
+is never returned, only whose it is (`own | project | none | off`).
+
+**Playing** — a library album by `album_id` (`playlistcontrol`), a streaming
+album by `playlist play <favorites_url> <title>`.
+
+**Packaging** — `python3-onnxruntime` in the image; the model and vocabulary
+are downloaded by `build-distro.sh` against pinned sha256 sums into
+`/usr/local/share/hifi-recommend/`. The project's Last.fm key is written
+there at build time from `LASTFM_API_KEY` or the git-ignored
+`distro/secrets/lastfm.key` — never committed; a build without it only
+switches Last.fm off. Devices updated without a new image get the module and
+the key with the System bundle and run in `tfidf` mode until they have the
+model; migration `0064` enables the timer.
+
+**Licensing** — MusicBrainz genres/tags (CC BY-NC-SA) and Last.fm
+(non-commercial terms) are used because no commercial licence is sold today.
+`NONCOMMERCIAL_SOURCES = False` removes them in one line; see the header of
+`hifi_recommend.py`. Credits to MusicBrainz, Wikidata and Last.fm are shown
+in the settings section.
 
 ## Pairing & security
 
@@ -406,12 +490,11 @@ GET/POST /vu_style            which meter look is in use (built-in or downloaded
 GET  /vu_skin/<id>/<file>     a skin's layers, for the previews
 GET  /vu_store                signed catalogue state (?summary=1: only the new/update counts)
 POST /vu_store/check, /vu_store/install, /vu_store/remove, /vu_store/seen
-GET/POST /nowplaying_animation   what Now Playing shows instead of the VU meters when they are off: none | cd | cdfront | vinyl | cassette | a downloaded scene's id
+GET/POST /nowplaying_animation   what Now Playing shows instead of the VU meters when they are off: none | cd | cdfront | changer | vinyl | cassette | a downloaded scene's id
 GET  /anim_store              the animations catalogue; POST /anim_store/check, /install, /remove, /seen
 GET/POST /ui_language         the on-screen UI language, owned by the device rather than by one UI
 GET/POST /nowplaying_autoexpand   seconds before Now Playing auto-expands (0 = off)
 GET/POST /timezone, GET /timezones
-GET/POST /debug_plymouth, /debug_kdump   boot/debug flags for the web admin's Debug card
 GET  /provision_status        setup-wizard state, proxied from webui_server; POST /provision_mode, /provision_wifi_connect, /provision_wifi_rescan
 POST /factory_reset           → hifi-factory-reset.sh (web admin re-validates the password first)
 POST /webui_reset_credentials clear the web-admin account (kiosk "reset web interface password")
@@ -1411,22 +1494,24 @@ ReplayGain), flashing its frame.
 ### Now Playing animations
 
 With the VU meters off, the Now Playing panel under the controls can show a
-scene instead. Four are built in: a top-loading CD player (`cd`), a late-80s
+scene instead. Five are built in: a top-loading CD player (`cd`), a late-80s
 front-loading CD player with a drawer and a fluorescent display (`cdfront`), a
-record played by the tonearm (`vinyl`) and a cassette deck (`cassette`); with
+late-90s 101-disc file-type changer (`changer`: the file turns, the loader
+lifts the album's disc into the drive), a record played by the tonearm
+(`vinyl`) and a cassette deck (`cassette`); with
 `none` the panel shows the song's lyrics. The scenes' keys work: the CD
 player's OPEN, track numbers, REPEAT, RANDOM, skip and search, the deck's
 transport, REW/FF held to wind and its volume fader, the turntable's
 START/STOP. With an internet radio the cassette label and the CD display show
 the station and the song. The choice is `/etc/hifi-player/nowplaying-animation`
-(`GET/POST /nowplaying_animation`, `none` | `cd` | `cdfront` | `vinyl` |
+(`GET/POST /nowplaying_animation`, `none` | `cd` | `cdfront` | `changer` | `vinyl` |
 `cassette` | a downloaded scene's id; absent = none), read by `Player`
 (`npAnimation`) with the other settings and set from Settings → Animations on
 the kiosk and in the web admin — not in the companion — or from the chooser
 (`NpChooser.qml`) that the two buttons next to Now Playing's clock open:
 picking a meter look turns the meters on, picking an animation turns them off.
 `NpAnimation.qml` picks the scene (`AnimCd.qml`, `AnimCdFront.qml`,
-`AnimVinyl.qml`, `AnimCassette.qml`, layers in `native-ui-qt/assets/anim/<scene>/`,
+`AnimChanger.qml`, `AnimVinyl.qml`, `AnimCassette.qml`, layers in `native-ui-qt/assets/anim/<scene>/`,
 the LCD and VFD digits in `assets/anim/lcd` and `assets/anim/vfd`), and
 `NpStage.qml` draws the same scene, or the meters, at full screen with the
 title, artist and progress — the button next to the clock. Each scene has one
@@ -1614,7 +1699,7 @@ still on the old layout".
 
 The ISO's live system **is** the image: with `single_squashfs` (the default in
 `build-iso.yml`), `--stage iso-image` builds one live-capable squashfs that
-serves both "Try Osmium Sound" and slot A, so the medium carries a single
+serves both the installer's live session and slot A, so the medium carries a single
 filesystem (CI fails an ISO above 2 GiB). With the switch off, the image
 travels as a second file, `osmium/rootfs.squashfs`. Either way the installer
 writes the A/B layout without network — see

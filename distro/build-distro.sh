@@ -49,7 +49,11 @@ BRAND_NAME="${BRAND_NAME:-Osmium Sound}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG="$SCRIPT_DIR/config"
+# Shared custom app code lives in the osmium-core submodule (core/), not at the
+# repo root any more. Every read of app code resolves against $CORE.
+CORE="$REPO_ROOT/core"
 QT_DIR=""            # pacchetto dell'interfaccia Qt (vuoto → cercato da solo)
+NP_DIR=""            # build web Now Playing (/opt/hifi-np; vuoto → cercato da solo)
 APP_VERSION=""
 STAGE="all"          # all | chroot | binary
 CLEAN_CACHE=0        # 1 → also wipe the Debian package cache
@@ -61,6 +65,7 @@ die()  { printf '\033[1;31m[hifi-build ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
     case "$1" in
         --qt-dir) QT_DIR="$2"; shift 2 ;;
+        --np-dir) NP_DIR="$2"; shift 2 ;;
         --app-version) APP_VERSION="$2"; shift 2 ;;
         --lyrion-url) LYRION_DEB_URL="$2"; shift 2 ;;
         --suite) DEBIAN_SUITE="$2"; shift 2 ;;
@@ -111,16 +116,19 @@ apt-get install -y --no-install-recommends live-build imagemagick curl xorriso c
 # The python daemons are only needed when we (re)build the chroot. A
 # binary-only re-spin reuses the existing chroot, so skip these.
 if [ "$STAGE" != "binary" ]; then
-    [ -f "$REPO_ROOT/api_server.py" ]      || die "Missing $REPO_ROOT/api_server.py"
-    [ -f "$REPO_ROOT/vu_meter_daemon.py" ] || die "Missing $REPO_ROOT/vu_meter_daemon.py"
-    [ -f "$REPO_ROOT/sources_server.py" ]  || die "Missing $REPO_ROOT/sources_server.py"
-    [ -f "$REPO_ROOT/hifi_logging.py" ]    || die "Missing $REPO_ROOT/hifi_logging.py"
-    [ -f "$REPO_ROOT/hifi_backup.py" ]     || die "Missing $REPO_ROOT/hifi_backup.py"
-    [ -f "$REPO_ROOT/hifi_i18n.py" ]       || die "Missing $REPO_ROOT/hifi_i18n.py"
-    [ -f "$REPO_ROOT/hifi_metadata.py" ]   || die "Missing $REPO_ROOT/hifi_metadata.py"
-    [ -f "$REPO_ROOT/hifi_tags.py" ]       || die "Missing $REPO_ROOT/hifi_tags.py"
-    [ -f "$REPO_ROOT/hifi_squeezelite.py" ] || die "Missing $REPO_ROOT/hifi_squeezelite.py"
-    [ -f "$REPO_ROOT/hifi_cdrip.py" ]      || die "Missing $REPO_ROOT/hifi_cdrip.py"
+    [ -f "$CORE/api_server.py" ]      || die "Missing $CORE/api_server.py"
+    [ -f "$CORE/vu_meter_daemon.py" ] || die "Missing $CORE/vu_meter_daemon.py"
+    [ -f "$CORE/sources_server.py" ]  || die "Missing $CORE/sources_server.py"
+    [ -f "$CORE/hifi_logging.py" ]    || die "Missing $CORE/hifi_logging.py"
+    [ -f "$CORE/hifi_backup.py" ]     || die "Missing $CORE/hifi_backup.py"
+    [ -f "$CORE/hifi_i18n.py" ]       || die "Missing $CORE/hifi_i18n.py"
+    [ -f "$CORE/hifi_metadata.py" ]   || die "Missing $CORE/hifi_metadata.py"
+    [ -f "$CORE/hifi_tags.py" ]       || die "Missing $CORE/hifi_tags.py"
+    [ -f "$CORE/hifi_squeezelite.py" ] || die "Missing $CORE/hifi_squeezelite.py"
+    [ -f "$CORE/hifi_cdrip.py" ]      || die "Missing $CORE/hifi_cdrip.py"
+    [ -f "$CORE/hifi_signal_path.py" ] || die "Missing $CORE/hifi_signal_path.py"
+    [ -f "$CORE/hifi_diskguard.py" ]  || die "Missing $CORE/hifi_diskguard.py"
+    [ -f "$CORE/hifi_recommend.py" ]  || die "Missing $CORE/hifi_recommend.py"
 fi
 
 # ─────────────────────────── Normalise text files ──────────────────
@@ -164,7 +172,7 @@ log "Seeded UI_VERSION = $APP_VERSION"
 # schermo nero (l'hook 0400 abilita hifi-qt.service solo se la trova).
 QT_DEST="$CONFIG/includes.chroot/opt/hifi-qt"
 if [ -z "$QT_DIR" ]; then
-    for c in "$REPO_ROOT/qtui" "$QT_DEST"; do
+    for c in "$REPO_ROOT/qtui" "$CORE/qtui" "$QT_DEST"; do
         [ -x "$c/hifi-qt" ] && QT_DIR="$c" && break
     done
 fi
@@ -283,26 +291,77 @@ chmod 644 "$SAMBA_DEST_DIR/hifi-shares.conf"
 log "Injecting python daemons → includes.chroot/usr/local/bin"
 BIN_DEST="$CONFIG/includes.chroot/usr/local/bin"
 mkdir -p "$BIN_DEST"
-cp -f "$REPO_ROOT/api_server.py"      "$BIN_DEST/"
-cp -f "$REPO_ROOT/vu_meter_daemon.py" "$BIN_DEST/"
-cp -f "$REPO_ROOT/sources_server.py"  "$BIN_DEST/"
-cp -f "$REPO_ROOT/webui_server.py"    "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_logging.py"    "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_backup.py"     "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_i18n.py"       "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_metadata.py"   "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_tags.py"       "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_squeezelite.py" "$BIN_DEST/"
-cp -f "$REPO_ROOT/hifi_cdrip.py"      "$BIN_DEST/"
-sed -i 's/\r$//' "$BIN_DEST/api_server.py" "$BIN_DEST/vu_meter_daemon.py" "$BIN_DEST/sources_server.py" "$BIN_DEST/webui_server.py" "$BIN_DEST/hifi_logging.py" "$BIN_DEST/hifi_backup.py" "$BIN_DEST/hifi_i18n.py" "$BIN_DEST/hifi_metadata.py" "$BIN_DEST/hifi_tags.py" "$BIN_DEST/hifi_squeezelite.py" "$BIN_DEST/hifi_cdrip.py"
+cp -f "$CORE/api_server.py"      "$BIN_DEST/"
+cp -f "$CORE/vu_meter_daemon.py" "$BIN_DEST/"
+cp -f "$CORE/sources_server.py"  "$BIN_DEST/"
+cp -f "$CORE/webui_server.py"    "$BIN_DEST/"
+cp -f "$CORE/hifi_platform.py"   "$BIN_DEST/"
+cp -f "$CORE/hifi_logging.py"    "$BIN_DEST/"
+cp -f "$CORE/hifi_backup.py"     "$BIN_DEST/"
+cp -f "$CORE/hifi_i18n.py"       "$BIN_DEST/"
+cp -f "$CORE/hifi_metadata.py"   "$BIN_DEST/"
+cp -f "$CORE/hifi_tags.py"       "$BIN_DEST/"
+cp -f "$CORE/hifi_squeezelite.py" "$BIN_DEST/"
+cp -f "$CORE/hifi_cdrip.py"      "$BIN_DEST/"
+cp -f "$CORE/hifi_signal_path.py" "$BIN_DEST/"
+cp -f "$CORE/hifi_diskguard.py"  "$BIN_DEST/"
+cp -f "$CORE/hifi_system_tweaks.py" "$BIN_DEST/"
+cp -f "$CORE/hifi_recommend.py"  "$BIN_DEST/"
+sed -i 's/\r$//' "$BIN_DEST/api_server.py" "$BIN_DEST/vu_meter_daemon.py" "$BIN_DEST/sources_server.py" "$BIN_DEST/webui_server.py" "$BIN_DEST/hifi_logging.py" "$BIN_DEST/hifi_backup.py" "$BIN_DEST/hifi_i18n.py" "$BIN_DEST/hifi_metadata.py" "$BIN_DEST/hifi_tags.py" "$BIN_DEST/hifi_squeezelite.py" "$BIN_DEST/hifi_cdrip.py" "$BIN_DEST/hifi_signal_path.py" "$BIN_DEST/hifi_diskguard.py" "$BIN_DEST/hifi_system_tweaks.py"
+sed -i 's/\r$//' "$BIN_DEST/hifi_recommend.py"
 chmod +x "$BIN_DEST/api_server.py" "$BIN_DEST/vu_meter_daemon.py" "$BIN_DEST/sources_server.py" "$BIN_DEST/webui_server.py"
+
+# Recommended albums (hifi_recommend.py): the sentence-embedding model and its
+# vocabulary, all-MiniLM-L6-v2 quantised to int8 (Apache-2.0, ~23 MB). Not in
+# git: fetched here once and kept, and checked against a pinned sha256 every
+# time, so a changed upstream file stops the build instead of shipping. A
+# device without the model still computes, with the tag-vector fallback — but
+# an image is meant to have it, so a failed download is an error here.
+REC_DEST="$CONFIG/includes.chroot/usr/local/share/hifi-recommend"
+REC_BASE="${HIFI_RECOMMEND_MODEL_BASE:-https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main}"
+mkdir -p "$REC_DEST"
+rec_fetch() {   # <file name in the image> <path under REC_BASE> <sha256>
+    if ! echo "$3  $REC_DEST/$1" | sha256sum -c --status 2>/dev/null; then
+        log "Fetching recommend model file $1"
+        curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$REC_DEST/$1.part" "$REC_BASE/$2" \
+            || die "Could not download $REC_BASE/$2"
+        echo "$3  $REC_DEST/$1.part" | sha256sum -c --status \
+            || die "Checksum mismatch for $2 (expected $3)"
+        mv -f "$REC_DEST/$1.part" "$REC_DEST/$1"
+    fi
+    chmod 644 "$REC_DEST/$1"
+}
+rec_fetch model.onnx onnx/model_quantized.onnx afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1
+rec_fetch vocab.txt  vocab.txt                 07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3
+
+# The project's Last.fm API key, for the tags and similar artists the
+# recommendations use. NEVER in git: it comes from $LASTFM_API_KEY (a CI
+# secret) or from distro/secrets/lastfm.key (git-ignored). Without one the
+# build goes on and Last.fm stays off on that image — which is what anyone
+# building from the public source gets. Only the API key, not the shared
+# secret: reading public data needs no more. The value is never printed.
+REC_KEY="${LASTFM_API_KEY:-}"
+if [ -z "$REC_KEY" ] && [ -f "$SCRIPT_DIR/secrets/lastfm.key" ]; then
+    REC_KEY="$(tr -d ' \t\r\n' < "$SCRIPT_DIR/secrets/lastfm.key")"
+fi
+rm -f "$REC_DEST/lastfm.key"
+if printf '%s' "$REC_KEY" | grep -Eq '^[0-9a-fA-F]{32}$'; then
+    printf '%s\n' "$REC_KEY" > "$REC_DEST/lastfm.key"
+    chmod 644 "$REC_DEST/lastfm.key"
+    log "Last.fm project key: included"
+elif [ -n "$REC_KEY" ]; then
+    log "WARNING: the Last.fm key is not 32 hex digits — left out, Last.fm off on this image"
+else
+    log "WARNING: no Last.fm key (LASTFM_API_KEY or distro/secrets/lastfm.key) — Last.fm off on this image"
+fi
+unset REC_KEY
 
 # Web-admin Vue build (built by CI before this script runs). REQUIRED: a
 # missing/empty dist here means every device installed from this ISO gets the
 # daemon's built-in fallback page instead of the real web-admin, silently and
 # with nothing in the ISO itself to show for it. Fail the build instead of
 # shipping that — build it first with (cd admin-webui && npm ci && npm run build).
-WEBUI_DIST_SRC="$REPO_ROOT/admin-webui/dist"
+WEBUI_DIST_SRC="$CORE/admin-webui/dist"
 WEBUI_DIST_DEST="$CONFIG/includes.chroot/opt/hifi-webui/dist"
 if [ -f "$WEBUI_DIST_SRC/index.html" ]; then
     mkdir -p "$WEBUI_DIST_DEST"
@@ -310,6 +369,28 @@ if [ -f "$WEBUI_DIST_SRC/index.html" ]; then
     log "Injected web-admin build → /opt/hifi-webui/dist"
 else
     die "admin-webui/dist missing or empty (no index.html) — build it first: (cd admin-webui && npm ci && npm run build). Refusing to ship an ISO without the web-admin UI."
+fi
+
+# Now Playing web build (Qt→WebAssembly, built by CI's np-payload job from the
+# vendored sources in native-ui-np/). Served by webui_server.py at /np from
+# /opt/hifi-np. REQUIRED: without it a device installed from this image answers
+# /np with "Now Playing web build not installed" — fail the build instead of
+# shipping that silently. Build it with:
+#   (cd native-ui-np && OSMIUM=$PWD/.. bash scripts/build-np.sh)
+NP_DEST="$CONFIG/includes.chroot/opt/hifi-np"
+if [ -z "$NP_DIR" ]; then
+    for c in "$REPO_ROOT/npout" "$CORE/native-ui-np/build/np" "$NP_DEST"; do
+        [ -f "$c/index.html" ] && NP_DIR="$c" && break
+    done
+fi
+if [ -n "$NP_DIR" ] && [ -f "$NP_DIR/index.html" ]; then
+    log "Injecting Now Playing web build → includes.chroot/opt/hifi-np (from $NP_DIR)"
+    if [ "$(cd "$NP_DIR" && pwd)" != "$(cd "$NP_DEST" 2>/dev/null && pwd)" ]; then
+        rm -rf "$NP_DEST"; mkdir -p "$NP_DEST"
+        cp -a "$NP_DIR/." "$NP_DEST/"
+    fi
+else
+    die "Now Playing web build not found: build it with native-ui-np/scripts/build-np.sh and pass --np-dir. Refusing to ship an image whose /np answers 'not installed'."
 fi
 
 log "Injecting helper scripts → includes.chroot/usr/local/sbin"
@@ -476,11 +557,10 @@ fi
 # don't disturb the chroot we're about to reuse.
 if [ "$STAGE" != "binary" ]; then
     log "Configuring live-build (suite=$DEBIAN_SUITE arch=$ARCH)…"
-    # No debian-installer at all: this is a live-only ISO. Both boot menu
-    # entries ("Install Osmium Sound" and "Try Osmium Sound") boot the SAME
-    # live kernel/initrd/squashfs — they differ only by a kernel parameter
-    # (hifi.installer=1) that the on-screen interface reads at startup to
-    # decide whether to show the installer UI or the normal kiosk UI. The actual
+    # No debian-installer at all: this is a live-only ISO. Its one boot menu
+    # entry ("Install Osmium Sound") boots the live kernel/initrd/squashfs
+    # with an extra kernel parameter (hifi.installer=1) that the on-screen
+    # interface reads at startup to show the installer UI. The actual
     # disk installation (partition/format/copy/bootloader) is driven by
     # hifi-disk-install.sh from inside that live session, not by d-i.
     # See config/hooks/normal/0500-brand-boot.hook.binary for the boot menu
@@ -498,6 +578,12 @@ if [ "$STAGE" != "binary" ]; then
         --distribution "$DEBIAN_SUITE" \
         --architectures "$ARCH" \
         --archive-areas "main contrib non-free non-free-firmware" \
+        `# Kernel pin (see config/package-lists/hifi.list.chroot for why): install the` \
+        `# exact pinned kernel instead of the default linux-image-amd64 metapackage` \
+        `# (which resolves to 6.12.115 and regressed USB isoc output). Composes to` \
+        `# linux-image-6.12.113+deb13-amd64 with the amd64 flavour; pulled from the` \
+        `# snapshot mirror via config/archives/snapshot-kernel.*. Bump by hand only.` \
+        --linux-packages "linux-image-6.12.113+deb13" \
         --bootloaders "syslinux,grub-efi" \
         --bootappend-live "boot=live components quiet splash loglevel=0 systemd.show_status=0 rd.systemd.show_status=0 vt.global_cursor_default=0 hostname=hifiplayer noautologin" \
         --iso-application "$BRAND_NAME" \

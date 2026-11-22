@@ -36,10 +36,18 @@ systemctl enable hifi-sources.service || true
 # setup hotspot + captive portal. Safe everywhere: it's a no-op portwise on a
 # configured unit and the marker gates the hotspot behaviour.
 systemctl enable hifi-webui.service   || true
+# A live session of the ISO runs the slot image itself, which has no marker in
+# /etc and no data partition: this puts both back (boot=live only).
+systemctl enable hifi-live-state.service || true
 
 echo "I: [hifi] enabling audio backend (squeezelite + Lyrion Music Server)"
 systemctl enable squeezelite.service        || true
 systemctl enable lyrionmusicserver.service  || true
+# Audio zones (one more player per DAC) and Lyrion's PCM to DSD rules: written
+# before Lyrion at every boot from /etc/hifi-player (carried over by an A/B
+# swap), so like hifi-bt-out the unit is always on and the choice is the file.
+systemctl enable hifi-zones.service         || true
+systemctl enable hifi-disk-reserve.service  || true
 # Network audio receivers (AirPlay/UPnP/Spotify Connect) are Lyrion plugins,
 # not system services — nothing to enable here.
 
@@ -48,7 +56,11 @@ echo "          installer's remove-live-packages purge; self-disables on success
 systemctl enable hifi-firstboot.service || true
 
 echo "I: [hifi] enabling audio quiesce before any shutdown/reboot (DMA panic workaround)"
-systemctl enable hifi-quiesce-audio-shutdown.service || true
+systemctl enable hifi-playback-quiesce.service || true
+
+echo "I: [hifi] enabling System tweaks apply at boot (CPU governor + hyper-threading to /sys;"
+echo "          off by default, the choice is /etc/hifi-player/system-tweaks.json)"
+systemctl enable hifi-system-tweaks.service || true
 
 echo "I: [hifi] enabling OTA stage-resume (finishes a download interrupted by a reboot;"
 echo "          no-op on every boot without a pending stage plan)"
@@ -114,6 +126,24 @@ echo "I: [hifi] enabling systemd-oomd and the memory log"
 # change cannot leave the policy in the slice drop-ins with nobody to apply it.
 systemctl enable systemd-oomd.service || true
 systemctl enable hifi-memlog.timer || true
+
+echo "I: [hifi] enabling the weekly backup timer"
+# Enabled, yet the backup stays off by default: the decision is
+# /etc/hifi-player/backup.json ("scheduled", false when absent), which
+# hifi-backup-run.py --scheduled reads first and exits on. Enabled here because
+# an image never runs apply.d/0033 (which used to be the only thing creating
+# and enabling these units): on every A/B install the toggle in Settings
+# said "saved" and nothing ever ran. With the timer already there, an owner
+# who turned the schedule on back then gets backups without touching anything.
+# The Settings toggle still enables/disables the timer itself, and 0033 does
+# the same on legacy installs.
+systemctl enable hifi-backup.timer || true
+
+echo "I: [hifi] enabling the Recommended albums timer"
+# On by default, every day at 18:00 with catch-up at power-on; the owner's
+# own days and time (Settings -> Recommended) arrive as a drop-in written by
+# the API, which also disables the timer for "only when I ask".
+systemctl enable hifi-recommend.timer || true
 
 echo "I: [hifi] making journald persistent across reboots"
 mkdir -p /var/log/journal

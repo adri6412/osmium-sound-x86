@@ -1,1 +1,0 @@
-Controle remoto para Lyrion Music Server e os jogadores.

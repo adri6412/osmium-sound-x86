@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v7
         with:
@@ -30,11 +32,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          for d in anim-store/*/; do
+          for d in core/anim-store/*/; do
             [ -f "$d/anim.json" ] || continue
-            python native-ui-qt/tools/anim-store.py pack "$d" --out out
+            python core/native-ui-qt/tools/anim-store.py pack "$d" --out out
           done
-          python native-ui-qt/tools/anim-store.py index out
+          python core/native-ui-qt/tools/anim-store.py index out
           cat out/index.json
 
       - name: Sign the catalogue

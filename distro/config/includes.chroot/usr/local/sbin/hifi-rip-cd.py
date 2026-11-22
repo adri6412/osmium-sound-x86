@@ -34,6 +34,15 @@ try:
 except Exception:
     pass
 import hifi_cdrip  # noqa: E402
+try:
+    import hifi_diskguard  # noqa: E402
+except Exception:                   # an image without it: no reserve to keep
+    hifi_diskguard = None
+try:
+    from hifi_i18n import t as _t  # noqa: E402
+except Exception:                   # a status line is never worth a crash
+    def _t(code, lang, **_v):
+        return code
 
 STATUS = "/run/hifi-rip-status.json"
 IMAGE_VERSION_FILE = "/usr/lib/osmium/IMAGE_VERSION"
@@ -42,9 +51,21 @@ _proc = None          # the cdparanoia/flac/sox running right now
 _cancelled = False
 
 
+def msg(code, **values):
+    """A status line: its hifi_i18n code and values. sources_server says it
+    in the language of whoever asks (/api/cd/rip/status), so the kiosk and
+    the web admin each read their own; `message` stays, in English, for a
+    reader that does not translate."""
+    return {"code": code, "vars": {k: str(v) for k, v in values.items()}}
+
+
 def write_status(state, track, total, progress, message, **extra):
-    payload = {"state": state, "track": track, "total": total,
-               "progress": progress, "message": message}
+    payload = {"state": state, "track": track, "total": total, "progress": progress}
+    if isinstance(message, dict):
+        payload.update(message)
+        payload["message"] = _t(message["code"], "en", **message["vars"])
+    else:
+        payload["message"] = message
     payload.update(extra)
     tmp = STATUS + ".tmp"
     with open(tmp, "w") as f:
@@ -52,9 +73,33 @@ def write_status(state, track, total, progress, message, **extra):
     os.replace(tmp, STATUS)
 
 
+def no_room(e, stopped=False):
+    """The status line for the system disk's reserve (hifi_diskguard): the
+    sizes in bytes, worded by sources_server in the reader's language."""
+    return msg("disk.noRoomStopped" if stopped else "disk.noRoom", need=e.need, room=e.room, reserve=e.reserve)
+
+
+def check_room(path, need, work, stopped=False, track=0, total=0):
+    """Stop before writing `need` more bytes at `path` would eat into the
+    system disk's reserve for Lyrion. Free on any other disk."""
+    if hifi_diskguard is None:
+        return
+    try:
+        hifi_diskguard.check(path, need)
+    except hifi_diskguard.NoRoom as e:
+        shutil.rmtree(work, ignore_errors=True)
+        fail(no_room(e, stopped), track, total)
+
+
 def fail(message, track=0, total=0):
     write_status("error", track, total, 0, message)
-    print(f"E: [hifi-rip] {message}", file=sys.stderr)
+    if isinstance(message, dict) and message["code"].startswith("disk.") and hifi_diskguard is not None:
+        v = message["vars"]
+        text = hifi_diskguard.message(hifi_diskguard.NoRoom("", int(v["need"]), int(v["room"]), int(v["reserve"])),
+                                      "en", stopped=message["code"] == "disk.noRoomStopped")
+    else:
+        text = _t(message["code"], "en", **message["vars"]) if isinstance(message, dict) else message
+    print(f"E: [hifi-rip] {text}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -84,6 +129,19 @@ def run(cmd, timeout):
     return subprocess.CompletedProcess(cmd, rc, out, err)
 
 
+def release_device(device):
+    """Drop any spurious automount of the disc before reading it. A mixed-mode
+    or Enhanced CD's data track can get auto-mounted (udisks on a desktop, a
+    stray mount unit elsewhere), and then cdparanoia fails with "Device or
+    resource busy". Best effort and silent: normally nothing is mounted."""
+    for dev in {device, os.path.realpath(device)}:
+        try:
+            subprocess.run(["umount", dev], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=15)
+        except Exception:
+            pass
+
+
 def extra_tags(pairs):
     """`--tag=` options for (NAME, value) pairs from the plan: Vorbis comment
     names are printable ASCII without '=', and a value never spans lines.
@@ -109,6 +167,22 @@ def read_toc(device):
     except Exception:
         return {}
     return hifi_cdrip.parse_cdparanoia_toc((r.stdout or "") + "\n" + (r.stderr or ""))
+
+
+def audio_only(tracks, toc):
+    """(tracks to rip, numbers left out). `cdparanoia -Q` lists the audio
+    tracks only, so a planned track past the last one it lists is the data
+    track of an Enhanced CD (the service leaves those out already when the
+    drive reports them; this is for a plan made without that). Without a TOC
+    every track is kept, and a "non audio" read is skipped in main()."""
+    if not toc:
+        return list(tracks), []
+    last = max(toc)
+    kept, skipped = [], []
+    for i, tr in enumerate(tracks):
+        num = int(tr.get("num") or (i + 1))
+        (skipped if num > last else kept).append(num if num > last else tr)
+    return kept, skipped
 
 
 CD_FRAME_BYTES = 2352      # one CD frame of audio: 588 stereo 16-bit samples
@@ -327,12 +401,12 @@ def place_album(work, dest, root, owner):
 
 def main():
     if len(sys.argv) != 2:
-        fail("usage: hifi-rip-cd.py <plan.json>")
+        fail(msg("cdrip.usage"))
     try:
         with open(sys.argv[1]) as f:
             plan = json.load(f)
     except Exception as e:
-        fail(f"piano di rip illeggibile: {e}")
+        fail(msg("cdrip.badPlan", err=e))
 
     signal.signal(signal.SIGTERM, _on_term)
     signal.signal(signal.SIGINT, _on_term)
@@ -343,9 +417,9 @@ def main():
     total = len(tracks)
     opt = hifi_cdrip.normalize(plan.get("options"))
     if not os.path.isdir(root):
-        fail("destinazione non montata")
+        fail(msg("cdrip.destNotMounted"))
     if not tracks:
-        fail("nessuna traccia da rippare")
+        fail(msg("cdrip.noTracks"))
 
     artist = plan.get("artist") or "Unknown Artist"
     album = plan.get("album") or "Unknown Album"
@@ -374,19 +448,39 @@ def main():
     def cancelled():
         if _cancelled:
             shutil.rmtree(work, ignore_errors=True)
-            write_status("cancelled", 0, total, 0, "Copia annullata")
+            write_status("cancelled", 0, total, 0, msg("cdrip.cancelled"))
             sys.exit(0)
 
-    write_status("ripping", 0, total, 0, "Lettura dell'indice del disco…")
+    write_status("ripping", 0, total, 0, msg("cdrip.readingToc"))
+    release_device(device)
     toc = read_toc(device)
     drive = hifi_cdrip.drive_info(device)
     cancelled()
+    tracks, skipped = audio_only(tracks, toc)
+    for num in skipped:
+        print(f"I: [hifi-rip] track {num} is not audio (Enhanced CD data track): skipped")
+    total = len(tracks)
+    # TRACKTOTAL is the disc's, not this rip's: only some tracks may have been
+    # picked (plan["disc_tracks"]; a plan without it rips them all)
+    disc_total = int(plan.get("disc_tracks") or 0)
+
+    def tracktotal():
+        # a data track found on the way (skipped) is not one of the disc's
+        return disc_total - len(skipped) if disc_total else total
+
+    if not tracks:
+        shutil.rmtree(work, ignore_errors=True)
+        fail(msg("cdrip.noAudioTracks"))
+    # The whole disc as WAV is a ceiling for what stays (FLAC is smaller)
+    # and for the one track in the works besides it.
+    check_room(work, sum(int((toc.get(int(tr.get("num") or (i + 1))) or {}).get("length") or 0) * CD_FRAME_BYTES
+                         for i, tr in enumerate(tracks)), work)
 
     results, outputs = [], []
     for i, tr in enumerate(tracks):
         num = int(tr.get("num") or (i + 1))
         title = tr.get("title") or f"Track {num:02d}"
-        label = f"Traccia {num}/{total}: {title}"
+        label = msg("cdrip.track", num=num, total=total, title=title)
         write_status("ripping", num, total, int(i * 100 / total), label)
         wav = os.path.join(work, f"track{num:02d}.wav")
         fname = f"{num:02d} - {hifi_cdrip.safe_name(title, f'Track {num:02d}', clean)}"
@@ -394,11 +488,25 @@ def main():
 
         def on_progress(frac, _i=i, _label=label):
             write_status("ripping", num, total, int((_i + frac) * 100 / total), _label)
+        # a track at a time too: the disk may be filling from elsewhere (the
+        # WAV, its check copy or de-emphasis, then the FLAC)
+        check_room(work, 2 * expected, work, stopped=i > 0, track=num, total=total)
         res = rip_track(device, num, wav, opt, expected, on_progress)
         cancelled()
+        if not res.get("ok") and hifi_cdrip.is_non_audio_error(res.get("error")):
+            # A data track the TOC did not give away: there is nothing to
+            # rip in it, and failing here used to throw away every audio
+            # track already read.
+            print(f"I: [hifi-rip] track {num}: cdparanoia says it is not audio, skipped")
+            skipped.append(num)
+            try:
+                os.remove(wav)
+            except OSError:
+                pass
+            continue
         if not res.get("ok"):
             shutil.rmtree(work, ignore_errors=True)
-            fail(f"lettura traccia {num} fallita (disco rovinato?)", num, total)
+            fail(msg("cdrip.readFailed", num=num), num, total)
         res["num"] = num
         pre_flag = bool((toc.get(num) or {}).get("pre"))
         pre_tags = []
@@ -419,7 +527,7 @@ def main():
             cmd = ["flac", "--silent", f"-{opt['flac_compression']}", "--force",
                    f"--tag=ARTIST={track_artist}", f"--tag=ALBUM={album}",
                    f"--tag=TITLE={title}", f"--tag=TRACKNUMBER={num}",
-                   f"--tag=TRACKTOTAL={total}"]
+                   f"--tag=TRACKTOTAL={tracktotal()}"]
             if year:
                 cmd.append(f"--tag=DATE={year}")
             if plan.get("discid"):
@@ -436,18 +544,33 @@ def main():
             cancelled()
             if r.returncode != 0 or not os.path.isfile(out):
                 shutil.rmtree(work, ignore_errors=True)
-                fail(f"codifica traccia {num} fallita", num, total)
+                fail(msg("cdrip.encodeFailed", num=num), num, total)
         res["file"] = os.path.basename(out)
         results.append(res)
         outputs.append(out)
 
+    if not results:
+        shutil.rmtree(work, ignore_errors=True)
+        fail(msg("cdrip.noAudioTracks"))
+    if len(results) != total:
+        # A track turned out to be data halfway through: the files already
+        # encoded carry a TRACKTOTAL that counted it.
+        total = len(results)
+        if opt["format"] == "flac":
+            run(["metaflac", "--remove-tag=TRACKTOTAL", f"--set-tag=TRACKTOTAL={tracktotal()}"] + outputs,
+                timeout=300)
+
     if opt["replaygain"] and opt["format"] == "flac" and outputs:
-        write_status("ripping", total, total, 99, "ReplayGain…")
+        write_status("ripping", total, total, 99, msg("cdrip.replayGain"))
         run(["metaflac", "--add-replay-gain"] + outputs, timeout=1800)
         cancelled()
 
     if cover:
         shutil.copyfile(cover, os.path.join(work, "cover.jpg"))
+    # Decided only now, with every track in hand: the folder may have been
+    # filled by another rip (or from a PC) while this one was reading.
+    dest = hifi_cdrip.unused_dir(dest)
+    log_name = ""
     if opt["log_file"]:
         log_name = hifi_cdrip.safe_name(f"{artist} - {album}", "rip", clean) + ".log"
         with open(os.path.join(work, log_name), "w", encoding="utf-8") as f:
@@ -456,13 +579,16 @@ def main():
     place_album(work, dest, root, owner)
 
     inaccurate = sum(1 for r in results if r.get("accurate") is False)
-    msg = f"{album} — {total} tracce"
-    if inaccurate:
-        msg += f" ({inaccurate} non verificate)"
+    done = (msg("cdrip.doneUnverified", album=album, total=total, unverified=inaccurate) if inaccurate
+            else msg("cdrip.done", album=album, total=total))
     ejected = False
     if opt["eject"]:
         ejected = run(["eject", device], timeout=30).returncode == 0
-    write_status("done", total, total, 100, msg, dest=dest, root=root, inaccurate=inaccurate, ejected=ejected)
+    # `log` lets sources_server serve the EAC-style rip log to the kiosk and the
+    # web admin (issue #131): it is the file name under `dest`, empty if the
+    # user turned the log off.
+    write_status("done", total, total, 100, done, dest=dest, root=root,
+                 inaccurate=inaccurate, ejected=ejected, log=log_name)
 
 
 if __name__ == "__main__":
@@ -471,4 +597,4 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:  # any unexpected crash still lands in the status file
-        fail(f"errore inatteso: {e}")
+        fail(msg("cdrip.unexpected", err=e))

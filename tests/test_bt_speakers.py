@@ -57,6 +57,10 @@ class BtTestCase(unittest.TestCase):
 
         self.addCleanup(patch.object(api_server, '_bt_available', lambda: True).stop)
         patch.object(api_server, '_bt_available', lambda: True).start()
+        # The test box may have no radio at all; the enable path is about the
+        # state file and the supervisor, so stub the hardware probe too.
+        self.addCleanup(patch.object(api_server, '_bt_adapter_present', lambda: True).stop)
+        patch.object(api_server, '_bt_adapter_present', lambda: True).start()
         for target in ('subprocess.run',):
             p = patch.object(api_server.subprocess, 'run', self._fake_run)
             p.start()
@@ -179,6 +183,17 @@ class StateFileTests(BtTestCase):
         self._write_snapshot({'adapter': True, 'speakers': []})
         api_server.set_bt_enabled(True)
         self.assertEqual(self._argv('systemctl', 'enable'), [])
+
+    def test_enabling_refuses_at_once_when_there_is_no_radio(self):
+        """Issue #121: a box with no Bluetooth radio must not write the switch
+        on and wait out the supervisor's power-up loop."""
+        self._write_snapshot({'adapter': False, 'speakers': []})
+        with patch.object(api_server, '_bt_adapter_present', lambda: False):
+            out = api_server.set_bt_enabled(True)
+        self.assertFalse(out['success'])
+        self.assertEqual(out['code'], 'bluetooth.noAdapter')
+        self.assertFalse(os.path.exists(api_server.BT_STATE_FILE) and self._state()['enabled'])
+        self.assertEqual(self._argv('systemctl', 'kill', '-s', 'HUP', 'hifi-bt-out.service'), [])
 
     def test_turning_it_off_keeps_the_speakers(self):
         self._write_state({'enabled': True, 'speakers': [{'mac': MAC, 'name': 'Kitchen'}]})
@@ -553,7 +568,8 @@ class SupervisorHarness(unittest.TestCase):
             return _cp(cmd)
         if cmd[0] == 'systemctl':
             if cmd[1] == 'is-active':
-                return _cp(cmd, stdout=('active\n' if cmd[2] in self.active else 'inactive\n'))
+                return _cp(cmd, stdout=''.join('active\n' if u in self.active else 'inactive\n'
+                                               for u in cmd[2:]))
             if cmd[1] == 'show':
                 return _cp(cmd, stdout='loaded\n')
             if cmd[1] == 'list-units':
@@ -601,6 +617,87 @@ class SupervisorTests(SupervisorHarness):
         self.mod.Supervisor().tick()
         self.assertIn(['systemctl', 'stop', 'hifi-bt-aplay.service'], self.calls)
         self.assertIn(['systemctl', 'stop', 'hifi-bt-watcher.service'], self.calls)
+
+    def test_off_is_torn_down_once_then_costs_no_process(self):
+        """🚨 Measured on a device with Bluetooth off: the tear-down ran on
+        every pass, ~6 systemctl processes every 8 s, ~2% CPU forever."""
+        self._write({'enabled': False, 'speakers': []})
+        self.active.add('bluetooth.service')
+        sup = self.mod.Supervisor()
+        sup.tick()
+        self.assertIn(['bluetoothctl', 'power', 'off'], self.calls)
+        self.calls.clear()
+        for _ in range(5):
+            sup.tick()
+        self.assertEqual(self.calls, [])
+
+    def test_off_still_notices_a_stack_started_behind_its_back(self):
+        self._write({'enabled': False, 'speakers': []})
+        sup = self.mod.Supervisor()
+        sup.tick()
+        self.active.add('bluetooth.service')
+        self.calls.clear()
+        sup.tick()
+        self.assertEqual(self.calls, [])          # not yet due
+        sup.down_checked -= self.mod.IDLE_RECHECK_SECONDS + 1
+        sup.tick()
+        self.assertIn(['systemctl', 'stop', 'bluetooth.service'], self.calls)
+        # and once it is down again, the check is one process, not six
+        self.calls.clear()
+        sup.down_checked -= self.mod.IDLE_RECHECK_SECONDS + 1
+        sup.tick()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][:2], ['systemctl', 'is-active'])
+
+    def test_switching_it_on_while_idle_is_picked_up_from_the_file(self):
+        self._write({'enabled': False, 'speakers': []})
+        sup = self.mod.Supervisor()
+        sup.tick()
+        self._write({'enabled': True, 'speakers': [{'mac': MAC, 'name': 'Anker'}]})
+        os.utime(self.mod.STATE_FILE, ns=(1, 1))   # whatever the clock's resolution
+        sup.tick()
+        self.assertIn(['systemctl', 'start', 'hifi-bluealsa.service'], self.calls)
+        self.assertTrue(self._status()['enabled'])
+
+    def test_up_for_a_remote_alone_runs_the_full_pass_once_a_minute(self):
+        """Measured on a device with output off and one remote paired: the full
+        pass every 8 s cost ~1.5% of a CPU."""
+        self._write({'enabled': False, 'speakers': [],
+                     'remotes': [{'mac': MAC, 'name': 'AR'}]})
+        sup = self.mod.Supervisor()
+        sup.tick()
+        self.assertIn(['bluetoothctl', 'info', MAC], self.calls)
+        self.calls.clear()
+        for _ in range(5):
+            sup.tick()
+        self.assertEqual(self.calls, [])
+        sup.quiet_at -= self.mod.REMOTES_ONLY_RECHECK_SECONDS + 1
+        sup.tick()
+        self.assertIn(['bluetoothctl', 'info', MAC], self.calls)
+
+    def test_up_for_a_remote_alone_still_reads_a_change_or_a_sighup_at_once(self):
+        self._write({'enabled': False, 'speakers': [],
+                     'remotes': [{'mac': MAC, 'name': 'AR'}]})
+        sup = self.mod.Supervisor()
+        sup.tick()
+        self.calls.clear()
+        sup.tick(force=True)
+        self.assertIn(['bluetoothctl', 'info', MAC], self.calls)
+        self._write({'enabled': True, 'speakers': [{'mac': MAC, 'name': 'Anker'}],
+                     'remotes': []})
+        os.utime(self.mod.STATE_FILE, ns=(2, 2))
+        self.calls.clear()
+        sup.tick()
+        self.assertIn(['systemctl', 'start', 'hifi-bluealsa.service'], self.calls)
+
+    def test_a_sighup_is_never_skipped_by_the_idle_check(self):
+        self._write({'enabled': False, 'speakers': []})
+        sup = self.mod.Supervisor()
+        sup.tick()
+        self._write({'enabled': True, 'speakers': []})
+        sup.down_sig = sup.state_sig()   # a rewrite the fingerprint missed
+        sup.tick(force=True)
+        self.assertIn(['systemctl', 'start', 'hifi-bluealsa.service'], self.calls)
 
     def test_on_brings_up_bluealsa_and_the_pairing_agent(self):
         self._write({'enabled': True, 'speakers': []})
@@ -852,6 +949,59 @@ class UnitFileTests(unittest.TestCase):
         """The PCM goes away with the daemon; a squeezelite left pointing at
         it is a restart loop, not a player."""
         self.assertIn('BindsTo=hifi-bluealsa.service', self._unit('hifi-bt-player@.service'))
+
+
+
+class ControllerAwakeTests(SupervisorHarness):
+    """A remote that dropped its link to save its battery came back 20-40 s
+    after a key press: the USB controller sat in runtime suspend. While the
+    radio is up it is kept awake; when Bluetooth goes down, the kernel's power
+    saving is back."""
+
+    def _tree(self):
+        sys_root = os.path.join(self.tmp, 'sys')
+        usb = os.path.join(sys_root, 'devices', 'pci0000:00', 'usb1', '1-9')
+        iface = os.path.join(usb, '1-9:1.0')
+        os.makedirs(os.path.join(usb, 'power'))
+        os.makedirs(iface)
+        with open(os.path.join(usb, 'power', 'control'), 'w') as f:
+            f.write('auto\n')
+        uart = os.path.join(sys_root, 'devices', 'platform', 'serial0')
+        os.makedirs(uart)
+        cls = os.path.join(sys_root, 'class', 'bluetooth')
+        os.makedirs(cls)
+        for name, dev in (('hci0', iface), ('hci1', uart)):
+            os.makedirs(os.path.join(cls, name))
+            os.symlink(dev, os.path.join(cls, name, 'device'))
+        p = patch.object(self.mod, 'BT_CLASS', cls)
+        p.start()
+        self.addCleanup(p.stop)
+        return os.path.join(usb, 'power', 'control')
+
+    def _read(self, path):
+        with open(path) as f:
+            return f.read().strip()
+
+    def test_awake_while_up_power_saving_when_down(self):
+        ctl = self._tree()
+        self.assertEqual(self.mod.keep_controller_awake(True), ['hci0'])   # the UART one has no switch
+        self.assertEqual(self._read(ctl), 'on')
+        self.assertEqual(self.mod.keep_controller_awake(True), [])         # nothing to rewrite
+        self.assertEqual(self.mod.keep_controller_awake(False), ['hci0'])
+        self.assertEqual(self._read(ctl), 'auto')
+
+    def test_no_bluetooth_at_all(self):
+        with patch.object(self.mod, 'BT_CLASS', os.path.join(self.tmp, 'missing')):
+            self.assertEqual(self.mod.keep_controller_awake(True), [])
+
+    def test_bring_up_and_tear_down_use_it(self):
+        with open(os.path.join(REPO, 'distro', 'config', 'includes.chroot', 'usr', 'local',
+                               'sbin', 'hifi-bt-out.py')) as f:
+            src = f.read()
+        up = src[src.index('    def bring_up('):src.index('    def watch_restarts(')]
+        down = src[src.index('    def tear_down('):src.index('    def stack_up(')]
+        self.assertIn('keep_controller_awake(True)', up)
+        self.assertIn('keep_controller_awake(False)', down)
 
 
 if __name__ == '__main__':

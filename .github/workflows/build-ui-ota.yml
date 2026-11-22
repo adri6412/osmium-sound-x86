@@ -16,14 +16,52 @@ permissions:
   contents: write
 
 jobs:
+  # 🚨 Lavoro a parte, sul runner nudo (niente container): compila la pagina web
+  # "Now Playing" (/np) in Qt→WebAssembly, dai sorgenti vendorizzati in
+  # native-ui-np/, e la impacchetta come artefatto np-payload per /opt/hifi-np.
+  # Non puo' stare dentro build-ui-ota perche' la toolchain WASM (emsdk 3.1.56 +
+  # Qt 6.8.2) pesa ~GB: qui ha la sua cache dedicata (chiave sugli script della
+  # toolchain) e, dopo il primo run, riparte veloce.
+  np-payload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install build tools (cmake is preinstalled on the runner)
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build fonts-dejavu-core
+      - name: Cache the WASM toolchain (emsdk + Qt)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../toolchain
+          key: toolchain-emsdk-3.1.56-qt-6.8.2-${{ hashFiles('core/native-ui-np/scripts/setup-toolchain.sh', 'core/native-ui-np/scripts/fix-qt-static.py') }}
+      - name: Set up the WASM toolchain (cached after the first run)
+        run: TOOLCHAIN="$GITHUB_WORKSPACE/../toolchain" bash core/native-ui-np/scripts/setup-toolchain.sh
+      - name: Build the Now Playing web payload (/opt/hifi-np)
+        run: |
+          cd core/native-ui-np
+          OSMIUM="$GITHUB_WORKSPACE/core" TOOLCHAIN="$GITHUB_WORKSPACE/../toolchain" bash scripts/build-np.sh
+          [ -f build/np/index.html ] || { echo "::error::Now Playing web build produced no index.html" >&2; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: np-payload
+          path: core/native-ui-np/build/np
+          retention-days: 1
+          if-no-files-found: error
+
   build-ui-ota:
     runs-on: ubuntu-latest
+    # Consuma l'artefatto np-payload (la pagina web Now Playing): deve attendere
+    # il lavoro che lo produce, altrimenti il download fallisce con "Artifact
+    # not found".
+    needs: np-payload
     # Without this a hung step (an apt mirror that never answers, say) keeps the
     # job alive for the 6h default instead of failing fast enough to rerun.
     timeout-minutes: 30
-
-    # Skip if this is a companion app release tag
-    if: ${{ !contains(github.ref, 'companion') }}
 
     steps:
       - name: Checkout repository
@@ -33,6 +71,8 @@ jobs:
           # clone — the changelog step below needs to walk back to the
           # previous release's tag.
           fetch-depth: 0
+          # Shared custom app code lives in the osmium-core submodule (core/).
+          submodules: recursive
 
       - name: Setup Node.js
         # for the web admin's build and the payload script's node one-liners;
@@ -41,7 +81,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: admin-webui/package-lock.json
+          cache-dependency-path: core/admin-webui/package-lock.json
 
       - name: Build web-admin (Vue) — shipped in the system bundle
         # Separate, self-contained Vue project (does not touch the Electron
@@ -50,10 +90,10 @@ jobs:
         # see the "Package system-components OTA bundle" step below, which
         # also refuses to package without a real build.
         run: |
-          if [ -f admin-webui/package.json ]; then
-            (cd admin-webui && npm ci && npm run build)
+          if [ -f core/admin-webui/package.json ]; then
+            (cd core/admin-webui && npm ci && npm run build)
           else
-            echo "::error::admin-webui/package.json missing — cannot build the web-admin UI" >&2
+            echo "::error::core/admin-webui/package.json missing — cannot build the web-admin UI" >&2
             exit 1
           fi
 
@@ -63,7 +103,7 @@ jobs:
         # pacchetto stanno in un solo script, cosi' l'aggiornamento e l'immagine
         # non possono divergere. Questo lavoro NON gira dentro un contenitore:
         # allo script serve docker.
-        run: bash native-ui-qt/ci/build-payload.sh qtui
+        run: bash core/native-ui-qt/ci/build-payload.sh qtui
       - name: Resolve version
         id: ver
         run: |
@@ -94,14 +134,20 @@ jobs:
           # notes listed only the two commits after the last alpha instead of
           # everything since v2.5.23). Never a companion-* release, and never
           # this tag itself (a rerun finds its own release already published).
+          # A plain dev (vX.Y.Z-dev.N) starts from the previous plain dev,
+          # never from an alpha: its own alphas are previews of the same
+          # commits, so counting from the last alpha left v2.5.26-dev.1 with
+          # "Minor fixes" instead of everything new since v2.5.25-dev.10.
           case "$CUR" in
-            *-*) ONLY_STABLE=false ;;
-            *)   ONLY_STABLE=true ;;
+            *-alpha*) KIND=any ;;
+            *-*)      KIND=dev ;;
+            *)        KIND=stable ;;
           esac
-          PREV="$(gh release list --repo "${{ github.repository }}" --limit 100 \
+          PREV="$(gh release list --repo "${{ github.repository }}" --limit 200 \
                     --json tagName,isPrerelease \
                     --jq "[.[] | select(.tagName | startswith(\"v\")) | select(.tagName != \"$CUR\")
-                            | select(($ONLY_STABLE | not) or (.isPrerelease | not))][0].tagName // empty" \
+                            | select(\"$KIND\" != \"stable\" or (.isPrerelease | not))
+                            | select(\"$KIND\" != \"dev\" or (.tagName | test(\"-dev\\\\.[0-9]+$\")))][0].tagName // empty" \
                     2>/dev/null || true)"
           if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/$PREV" >/dev/null; then
             RANGE="refs/tags/$PREV..HEAD"
@@ -129,33 +175,55 @@ jobs:
           # loro eseguibile (hifi-qt oppure hifi-media-player), quindi i
           # pacchetti gia' pubblicati restano installabili.
           VERSION="${{ steps.ver.outputs.version }}"
-          [ -x qtui/hifi-qt ] || { echo "::error::qtui/hifi-qt mancante — l'interfaccia Qt non e' stata costruita" >&2; exit 1; }
-          printf '%s\n' "$VERSION" > qtui/UI_VERSION
+          [ -x core/qtui/hifi-qt ] || { echo "::error::core/qtui/hifi-qt mancante — l'interfaccia Qt non e' stata costruita" >&2; exit 1; }
+          printf '%s\n' "$VERSION" > core/qtui/UI_VERSION
           # nome NUOVO: l'aggiornatore vecchio rifiuterebbe un pacchetto senza
           # Electron e bloccherebbe tutto l'aggiornamento; non trovando
           # `hifi-ui-` quegli apparecchi saltano il passo e lo prendono al giro dopo
           TAR="hifi-qtui-${VERSION}.tar.gz"
-          tar czf "$TAR" -C qtui .
+          tar czf "$TAR" -C core/qtui .
           sha256sum "$TAR" > "${TAR}.sha256"
           echo "tarball=$TAR" >> "$GITHUB_OUTPUT"
 
+      - name: Fetch the Now Playing web build (/opt/hifi-np) from the np-payload job
+        uses: actions/download-artifact@v8
+        with:
+          name: np-payload
+          path: npout
       - name: Package system-components OTA bundle (tarball + sha256)
         id: packsys
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           ROOT=sysbundle
           rm -rf "$ROOT"
           mkdir -p "$ROOT/usr/local/bin" "$ROOT/usr/local/sbin" "$ROOT/etc/systemd/system"
-          # Python API + daemons
-          cp api_server.py vu_meter_daemon.py sources_server.py webui_server.py hifi_logging.py hifi_backup.py hifi_i18n.py hifi_metadata.py hifi_tags.py hifi_squeezelite.py hifi_cdrip.py "$ROOT/usr/local/bin/"
+          # Python API + daemons (from the osmium-core submodule at core/).
+          # hifi_platform.py is REQUIRED: api_server.py imports it at module load
+          # to read /etc/hifi-player/platform.conf — omitting it crashes the API.
+          (cd core && cp api_server.py vu_meter_daemon.py sources_server.py webui_server.py hifi_platform.py hifi_logging.py hifi_backup.py hifi_i18n.py hifi_metadata.py hifi_tags.py hifi_squeezelite.py hifi_cdrip.py hifi_signal_path.py hifi_diskguard.py hifi_system_tweaks.py hifi_recommend.py "$GITHUB_WORKSPACE/$ROOT/usr/local/bin/")
           # Web-admin Vue build (served by webui_server.py from /opt/hifi-webui/dist).
           # REQUIRED: a missing/empty dist here means every device that applies
           # this system bundle loses the web-admin UI, silently. Fail instead.
-          if [ -f admin-webui/dist/index.html ]; then
+          if [ -f core/admin-webui/dist/index.html ]; then
             mkdir -p "$ROOT/opt/hifi-webui/dist"
-            cp -r admin-webui/dist/. "$ROOT/opt/hifi-webui/dist/"
+            cp -r core/admin-webui/dist/. "$ROOT/opt/hifi-webui/dist/"
           else
             echo "::error::admin-webui/dist missing or empty (no index.html) — refusing to package a system bundle without the web-admin UI" >&2
+            exit 1
+          fi
+          # Now Playing web build (/opt/hifi-np), compiled by the np-payload job.
+          # REQUIRED: without it a device that applies this bundle answers /np
+          # with "Now Playing web build not installed". Fail instead of shipping
+          # that silently. The allowlist in hifi-system-update.sh now copies
+          # /opt/hifi-np, and apply.d/0065-np-files.sh closes the first-update
+          # gap (same trap as /opt/hifi-qt, see 0057).
+          if [ -f npout/index.html ]; then
+            mkdir -p "$ROOT/opt/hifi-np"
+            cp -r npout/. "$ROOT/opt/hifi-np/"
+          else
+            echo "::error::Now Playing web build (npout/index.html) missing — refusing to package a system bundle whose /np answers 'not installed'" >&2
             exit 1
           fi
           # Helper / OTA scripts (sh + python workers)
@@ -165,6 +233,24 @@ jobs:
           # into Lyrion's prefs by sources_server.py's lms_skin logic.
           mkdir -p "$ROOT/usr/local/share"
           cp -r distro/config/includes.chroot/usr/local/share/hifi-lms-skin "$ROOT/usr/local/share/"
+          # Osmium LMS plugins (OsmiumConvert, OsmiumRecommended): shipped under
+          # /usr/local/share/osmium/lms-plugins and re-asserted into Lyrion's
+          # plugin dir on every boot by hifi-lyrion-plugins-ensure.sh (copied
+          # above with the other sbin scripts). Without this they reached only
+          # fresh ISO installs, never an OTA system update.
+          mkdir -p "$ROOT/usr/local/share/osmium"
+          cp -r distro/config/includes.chroot/usr/local/share/osmium/lms-plugins "$ROOT/usr/local/share/osmium/"
+          # Recommended albums: the project's Last.fm API key, from the secret
+          # (never in git, never echoed). Without it the bundle is built all the
+          # same, and a device keeps the key its image came with: the installer
+          # only merges what a bundle carries.
+          if printf '%s' "${LASTFM_API_KEY:-}" | grep -Eq '^[0-9a-fA-F]{32}$'; then
+            mkdir -p "$ROOT/usr/local/share/hifi-recommend"
+            printf '%s\n' "$LASTFM_API_KEY" > "$ROOT/usr/local/share/hifi-recommend/lastfm.key"
+            chmod 644 "$ROOT/usr/local/share/hifi-recommend/lastfm.key"
+          else
+            echo "::warning::LASTFM_API_KEY not set (or not 32 hex digits): system bundle without the Last.fm project key"
+          fi
           # Schema A/B (RAUC): template del selettore GRUB e di system.conf, initrd
           # di conversione, keyring pubblica con cui l'apparecchio accetta i bundle.
           cp -r distro/config/includes.chroot/usr/local/share/hifi-ab "$ROOT/usr/local/share/"
@@ -172,6 +258,10 @@ jobs:
           # systemd units (+ timer)
           cp distro/config/includes.chroot/etc/systemd/system/*.service "$ROOT/etc/systemd/system/"
           cp distro/config/includes.chroot/etc/systemd/system/*.timer "$ROOT/etc/systemd/system/" 2>/dev/null || true
+          # Lyrion's drop-in (its prefs guard, hifi-lyrion-prefs-guard.py)
+          mkdir -p "$ROOT/etc/systemd/system/lyrionmusicserver.service.d"
+          cp distro/config/includes.chroot/etc/systemd/system/lyrionmusicserver.service.d/*.conf \
+             "$ROOT/etc/systemd/system/lyrionmusicserver.service.d/"
           # Interfaccia Qt (seconda interfaccia su schermo, scelta da
           # /etc/hifi-player/ui-engine). Sta nel pacchetto di SISTEMA e non in
           # quello UI perché il bundle "ui" viene scompattato per intero su
@@ -257,6 +347,10 @@ jobs:
           bash tests/test-factory-reset.sh
           echo "== lyrion bootstrap (shell) =="
           bash tests/test-lyrion-ensure.sh
+          echo "== live session state (shell) =="
+          bash tests/test-live-state.sh
+          echo "== lyrion install progress (shell) =="
+          bash tests/test-lyrion-progress.sh
           echo "== streaming read-ahead (shell) =="
           bash tests/test-stream-tune.sh
           echo "== image bundle download (shell) =="
@@ -265,21 +359,37 @@ jobs:
           bash tests/test-ab-media.sh
           echo "== second chance at the A/B switch (shell) =="
           bash tests/test-ab-image.sh
+          echo "== UI apply resumes after an interruption (shell) =="
+          bash tests/test-ota-ui-apply.sh
+          echo "== legacy cleanup, --deep included (shell) =="
+          bash tests/test-ab-convert-cleanup.sh
+          echo "== Lyrion versions kept after an update (shell) =="
+          bash tests/test-lyrion-prune.sh
+          echo "== boot health and watchdog (shell) =="
+          bash tests/test-boot-health.sh
+          echo "== A/B boot selector under grub-emu (shell; skips without grub-emu) =="
+          bash tests/test-grub-selector.sh
           echo "== update plan (python) =="
-          python3 -m pip install --quiet flask flask-cors
+          python3 -m pip install --quiet flask flask-cors numpy
+          # api_server/hifi_*/webui_server now live in the core/ submodule, not at
+          # the repo root — make them importable for the tests that stay here.
+          export PYTHONPATH="$GITHUB_WORKSPACE/core${PYTHONPATH:+:$PYTHONPATH}"
           python3 tests/test_update_plan.py
           echo "== what stays on file.osmiumsound.it (python) =="
           python3 tests/test_prune_ota_r2.py
           echo "== timezone (python) =="
           python3 tests/test_timezone.py
           echo "== static IPv4 (python) =="
-          python3 tests/test_static_ipv4.py
+          # byte-identical to core and opens core/webui_server.py by path → run from core/tests
+          python3 core/tests/test_static_ipv4.py
           echo "== lyrion server role (python) =="
           python3 tests/test_lms_role.py
           echo "== album/artist information + CD lookup (python) =="
           python3 tests/test_metadata.py
           echo "== library editor: tags inside the files (python) =="
           python3 tests/test_tags.py
+          echo "== audio zones + PCM to DSD (python) =="
+          python3 tests/test_zones_pcm2dsd.py
           echo "== bluetooth speakers (python) =="
           python3 tests/test_bt_speakers.py
           echo "== bluetooth remote controls (python) =="
@@ -289,7 +399,10 @@ jobs:
           echo "== web admin: who gets a CSRF token (python) =="
           python3 tests/test_csrf.py
           echo "== web admin: every call has a route through (python) =="
-          python3 tests/test_webui_routes.py
+          # byte-identical to core and opens core/webui_server.py by path → run from core/tests
+          python3 core/tests/test_webui_routes.py
+          echo "== recommended albums (python) =="
+          python3 tests/test_recommend.py
 
       - name: Stage LMS skin assets into the OS payload
         # apply.d/0048-lms-skin-assets.sh installs these; they are deliberately
@@ -363,17 +476,34 @@ jobs:
             distro/config/includes.chroot/usr/local/sbin/hifi-lyrion-ensure.sh \
             tests/test-ext-guardian.sh tests/test-apt-shim.sh tests/test-factory-reset.sh \
             tests/test-lyrion-ensure.sh tests/test-stream-tune.sh tests/test-ab-media.sh \
-            tests/test-bundle-fetch.sh \
-            tests/test-ab-image.sh distro/config/includes.chroot/usr/local/sbin/hifi-ab-image.sh
+            tests/test-bundle-fetch.sh tests/test-live-state.sh \
+            distro/config/includes.chroot/usr/local/sbin/hifi-live-state.sh \
+            tests/test-ab-image.sh distro/config/includes.chroot/usr/local/sbin/hifi-ab-image.sh \
+            distro/config/includes.chroot/usr/local/sbin/hifi-boot-health.sh \
+            distro/config/includes.chroot/usr/local/sbin/hifi-boot-watchdog.sh \
+            tests/test-ota-ui-apply.sh tests/test-ab-convert-cleanup.sh \
+            tests/test-boot-health.sh tests/test-grub-selector.sh tests/test-lyrion-prune.sh tests/test-lyrion-progress.sh
           echo "== idempotency (run apply.sh twice) =="
           export HIFI_OS_VERSION=ci-test
           export HIFI_PAYLOAD_DIR="$PWD/distro/os-update"
           export HIFI_OS_NO_APT=1
           rm -f "$HIFI_PAYLOAD_DIR/REBOOT"
+          # Pass the env THROUGH sudo explicitly: newer runner images reject
+          # `sudo -E` ("preserving the entire environment is not supported"),
+          # which silently dropped HIFI_OS_NO_APT and made the test start
+          # installing packages for real — surfacing bugs the trixie product
+          # never hits. `sudo env VAR=...` works regardless of the sudo policy.
+          SUDO_ENV="HIFI_OS_VERSION=$HIFI_OS_VERSION HIFI_PAYLOAD_DIR=$HIFI_PAYLOAD_DIR HIFI_OS_NO_APT=$HIFI_OS_NO_APT"
           echo "--- first run (applies) ---"
-          sudo -E sh "$HIFI_PAYLOAD_DIR/apply.sh"
+          # shellcheck disable=SC2086
+          sudo env $SUDO_ENV sh "$HIFI_PAYLOAD_DIR/apply.sh"
+          # Clear the marker the first run may legitimately have set: this gate
+          # checks that the SECOND (no-op) run asks for no reboot, so a reboot
+          # the first apply correctly requested must not count against it.
+          sudo rm -f "$HIFI_PAYLOAD_DIR/REBOOT"
           echo "--- second run (must be a clean no-op) ---"
-          OUT2="$(sudo -E sh "$HIFI_PAYLOAD_DIR/apply.sh")"
+          # shellcheck disable=SC2086
+          OUT2="$(sudo env $SUDO_ENV sh "$HIFI_PAYLOAD_DIR/apply.sh")"
           echo "$OUT2"
           echo "$OUT2" | grep -q 'SUMMARY: changed=0 failed=0 ' \
             || { echo "FAIL: second run reported changes/failures (not idempotent)"; exit 1; }
@@ -446,7 +576,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: qt-payload
-          path: qtui
+          path: core/qtui
           retention-days: 1
           if-no-files-found: error
 
@@ -480,24 +610,6 @@ jobs:
             "${{ steps.changelog.outputs.file }}"
           echo "channel=$CH" >> "$GITHUB_OUTPUT"
 
-      # Commits the manifest to the gh-pages branch — despite the action's
-      # name this is just a git push, not a GitHub Pages deploy. The deploy-site
-      # job at the end puts it on Cloudflare Pages (osmium-sound.pages.dev,
-      # OTA_MANIFEST_BASE in api_server.py).
-      # Il manifest è ciò che l'apparecchio legge davvero, quindi non deve
-      # nominare una release che ancora non esiste: per i tag che avranno
-      # un'immagine lo pubblica il lavoro finale, insieme alla release. Qui
-      # resta solo per i companion, che un'immagine non ce l'hanno.
-      - name: Push OTA manifest to gh-pages branch
-        if: ${{ github.ref_type == 'tag' && contains(github.ref_name, 'companion') }}
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./manifest-out
-          publish_branch: gh-pages
-          destination_dir: ota
-          keep_files: true          # don't wipe fdroid/ and the other channels
-
       - name: Upload artifact (manual runs)
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
@@ -521,8 +633,7 @@ jobs:
   # ignorano.
   image:
     runs-on: ubuntu-latest
-    needs: build-ui-ota
-    if: ${{ !contains(github.ref, 'companion') }}
+    needs: [build-ui-ota, np-payload]
     timeout-minutes: 120
     defaults:
       run:
@@ -546,18 +657,23 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: admin-webui/package-lock.json
+          cache-dependency-path: core/admin-webui/package-lock.json
       - uses: actions/download-artifact@v8
         with:
           name: qt-payload
           path: qtui
       - run: chmod 755 qtui/hifi-qt
+      - uses: actions/download-artifact@v8
+        with:
+          name: np-payload
+          path: npout
       - name: Build web-admin (Vue)
-        run: (cd admin-webui && npm ci && npm run build)
+        run: (cd core/admin-webui && npm ci && npm run build)
       - name: Resolve version
         id: ver
         run: |
@@ -577,6 +693,7 @@ jobs:
           cd distro
           ./build-distro.sh --stage image --suite trixie \
             --qt-dir "$GITHUB_WORKSPACE/qtui" \
+            --np-dir "$GITHUB_WORKSPACE/npout" \
             --app-version "${INPUT_VERSION#v}"
           ls -lh /mnt/image-out
       - uses: actions/upload-artifact@v4
@@ -593,17 +710,14 @@ jobs:
   publish-image:
     runs-on: ubuntu-latest
     needs: [build-ui-ota, image]
-    # Gira anche quando l'immagine è stata saltata — i tag del companion non ne
-    # hanno una — perché da qui in poi questo è l'UNICO punto che pubblica: se
-    # non girasse, quelle release non nascerebbero affatto. Non gira invece se
-    # l'immagine è FALLITA: una release a metà non deve esistere.
-    if: ${{ always() && github.ref_type == 'tag' && needs.build-ui-ota.result == 'success' && (needs.image.result == 'success' || needs.image.result == 'skipped') }}
+    # Questo è l'UNICO punto che pubblica la release: se non girasse, quelle
+    # release non nascerebbero affatto. Non gira invece se l'immagine è
+    # FALLITA: una release a metà non deve esistere.
+    if: ${{ always() && github.ref_type == 'tag' && needs.build-ui-ota.result == 'success' && needs.image.result == 'success' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
-        # assente sui tag del companion, dove il lavoro dell'immagine non gira
-        continue-on-error: true
         with:
           name: ab-image
           path: .
@@ -747,24 +861,22 @@ jobs:
           commit_message: "ota: manifest ${{ github.ref_name }} (+ immagine RAUC)"
 
   # The manifest is on gh-pages now, but devices read it from Cloudflare Pages
-  # (OTA_MANIFEST_BASE), which only changes when deploy-pages.yml runs.
-  # 🚨 deploy-pages.yml also listens to workflow_run of this workflow, and that
-  # never fires here: GitHub emits no workflow_run for a run on a tag ref, and
-  # every release is one. v2.5.26-dev.1-alpha4 reached gh-pages and R2 and
-  # stayed invisible to the devices until a hand-run deploy. So this run asks
-  # for the deploy itself; GITHUB_TOKEN may start a workflow_dispatch.
+  # (OTA_MANIFEST_BASE). The site (and that Pages deploy) now lives in the
+  # adri6412/osmium-sound-site repo, which pulls ota/ from this repo's gh-pages.
+  # 🚨 A release runs on a tag, so it emits no workflow_run the site repo could
+  # listen to; after writing the manifest this run tells the site repo to
+  # redeploy via a repository_dispatch. Needs a PAT (secret SITE_DISPATCH_PAT)
+  # with contents:write on osmium-sound-site — GITHUB_TOKEN cannot reach it.
   deploy-site:
     runs-on: ubuntu-latest
     needs: publish-image
     if: ${{ always() && needs.publish-image.result == 'success' }}
     timeout-minutes: 5
-    permissions:
-      actions: write
     steps:
-      - name: Put the new manifest on Cloudflare Pages
+      - name: Ask osmium-sound-site to redeploy with the new OTA manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run deploy-pages.yml --ref main -R "${{ github.repository }}"
+          GH_TOKEN: ${{ secrets.SITE_DISPATCH_PAT }}
+        run: gh api repos/adri6412/osmium-sound-site/dispatches -f event_type=ota-updated
 
   # 🚨 A release has to serve BOTH worlds, always. We cannot know when a given
   # owner will update, or whether they will have migrated by then: a device
@@ -778,7 +890,7 @@ jobs:
   verify-release:
     runs-on: ubuntu-latest
     needs: [build-ui-ota, image, publish-image]
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && !contains(github.ref, 'companion') }}
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Both the old and the new devices must find their update
         env:
@@ -876,7 +988,7 @@ jobs:
   # the previous, working one of its channel away.
   prune-ota-r2:
     needs: verify-release
-    if: ${{ needs.verify-release.result == 'success' && !contains(github.ref, 'companion') }}
+    if: ${{ needs.verify-release.result == 'success' }}
     uses: ./.github/workflows/prune-ota-r2.yml
     with:
       keep: ${{ github.ref_name }}

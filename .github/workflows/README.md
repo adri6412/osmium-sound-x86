@@ -1,22 +1,26 @@
 # GitHub Actions Workflows
 
 CI for the whole Osmium Sound repository: appliance releases (OTA bundles),
-the install ISO, the Android companion app, Osmium Flasher, the website and
-storage housekeeping. Tag/branch conventions and the release channels are in
-[TAG_CONVENTIONS.md](TAG_CONVENTIONS.md).
+the install ISO, Osmium Flasher and storage housekeeping.
+Tag/branch conventions and the release channels are in
+[TAG_CONVENTIONS.md](TAG_CONVENTIONS.md). The Android companion app has moved to
+its own repo, [`adri6412/osmium-companion-android`](https://github.com/adri6412/osmium-companion-android);
+the public site **osmiumsound.it** has likewise moved to
+[`adri6412/osmium-sound-site`](https://github.com/adri6412/osmium-sound-site)
+— that repo now deploys the Cloudflare Pages project, pulling the OTA manifests
+from this repo's `gh-pages` branch (see `build-ui-ota.yml` step 11 and the
+`deploy-site` job).
 
 | Workflow | Trigger | Produces |
 |---|---|---|
-| [`build-ui-ota.yml`](build-ui-ota.yml) | push of a `v*` tag (not `companion-*`); manual | OTA bundles `hifi-qtui-`, `hifi-system-`, `hifi-os-` (+ sha256, OS signature), offline dev installer, GitHub Release, payloads of every channel also on `file.osmiumsound.it/ota/<tag>/`, OTA manifest on `gh-pages` (+ a copy per channel on file.osmiumsound.it), then `prune-ota-r2.yml` |
-| [`build-iso.yml`](build-iso.yml) | manual (`workflow_dispatch`, tag as input) | `hifi-player-<tag>.iso` + `.sha256` + `.sha256.sig` + `latest.json` (artifact; optionally attached to the Release) |
-| [`build-companion-apk.yml`](build-companion-apk.yml) | push of a `companion-v*` tag; manual | signed APK, GitHub Release, unit-test/lint reports, self-hosted F-Droid repos on `gh-pages` |
+| [`build-ui-ota.yml`](build-ui-ota.yml) | push of a `v*` tag; manual | OTA bundles `hifi-qtui-`, `hifi-system-`, `hifi-os-` (+ sha256, OS signature), offline dev installer, GitHub Release, payloads of every channel also on `file.osmiumsound.it/ota/<tag>/`, OTA manifest on `gh-pages` (+ a copy per channel on file.osmiumsound.it), then `prune-ota-r2.yml` |
+| [`build-iso.yml`](build-iso.yml) | manual (`workflow_dispatch`, tag as input) | `hifi-player-<tag>.iso` + `.sha256` + `.sha256.sig` + `latest.json`, and the USB/disk image `hifi-player-<tag>.img.xz` + sidecars (artifacts; optionally attached to the Release) |
 | [`build-flasher.yml`](build-flasher.yml) | manual | Osmium Flasher binaries (Windows `.exe`, Linux `.run`) as artifacts |
-| [`deploy-pages.yml`](deploy-pages.yml) | push to `main` touching `website/**`; end of every `build-ui-ota.yml` / `build-companion-apk.yml` run; manual | deploys `website/` + `ota/` + `fdroid/` from `gh-pages` to Cloudflare Pages (osmiumsound.it) with wrangler |
 | [`prune-ota-r2.yml`](prune-ota-r2.yml) | called by `build-ui-ota.yml` after `verify-release`; nightly; manual (dry run by default) | deletes from `file.osmiumsound.it/ota/` every release no channel's manifest names (`prune-ota-r2.py`) |
 | [`cleanup-actions-storage.yml`](cleanup-actions-storage.yml), [`Clean.yml`](Clean.yml) | manual | delete Actions caches / artifacts to free storage |
 
 Helper scripts live in [`../scripts/`](../scripts/): `make-ota-manifest.py`
-(OTA manifest for `gh-pages`, deployed to Pages by `deploy-pages.yml`), `make-iso-manifest.py` (`latest.json` for
+(OTA manifest for `gh-pages`, deployed to Pages by the `osmium-sound-site` repo), `make-iso-manifest.py` (`latest.json` for
 the flasher) and `prune-ota-r2.py` (what stays on file.osmiumsound.it/ota/). The repo-root [`tools/publish-iso.sh`](../../tools/publish-iso.sh)
 reproduces the ISO signing + manifest step by hand for an ISO already on disk.
 
@@ -24,9 +28,9 @@ reproduces the ISO signing + manifest step by hand for an ISO already on disk.
 
 ## `build-ui-ota.yml` — appliance release (OTA bundles)
 
-**Trigger:** push of any tag matching `v*` whose name does not contain
-`companion` (stable `vX.Y.Z`, dev `vX.Y.Z-dev.N`, alpha `vX.Y.Z-dev.N-alphaM`),
-or a manual run (artifacts only, no Release).
+**Trigger:** push of any tag matching `v*` (stable `vX.Y.Z`, dev
+`vX.Y.Z-dev.N`, alpha `vX.Y.Z-dev.N-alphaM`), or a manual run (artifacts only,
+no Release).
 
 **Steps, in order:**
 
@@ -83,12 +87,19 @@ or a manual run (artifacts only, no Release).
 11. Builds the OTA manifest (`ota/latest-prod.json` for a stable tag,
     `ota/latest-dev.json` / `latest-alpha.json` for prereleases — see
     `make-ota-manifest.py`) and pushes it to the `gh-pages` branch under
-    `ota/` with `keep_files: true` (so the website and the F-Droid repos on the
-    same branch are untouched). Devices read it from the Cloudflare Pages
-    origin first and fall back to the GitHub REST API.
+    `ota/` with `keep_files: true` (so the other channels' manifests on the same
+    branch are untouched). Devices read it from the Cloudflare Pages origin first
+    and fall back to the GitHub REST API.
+12. The `deploy-site` job then dispatches a `repository_dispatch`
+    (`event_type=ota-updated`) to `adri6412/osmium-sound-site` with the
+    `SITE_DISPATCH_PAT` secret. That repo owns the Cloudflare Pages project: it
+    re-pulls this repo's `gh-pages` `ota/` and redeploys, so the manifest devices
+    read from `osmium-sound.pages.dev/ota/` tracks the Release.
 
 **Secrets:** `OTA_SIGNING_KEY` (Ed25519 private key PEM, see
-`distro/ota-keys/README.md`), `GITHUB_TOKEN` (automatic).
+`distro/ota-keys/README.md`), `GITHUB_TOKEN` (automatic), `SITE_DISPATCH_PAT`
+(a PAT with `contents:write` on `osmium-sound-site`, for the `deploy-site`
+dispatch).
 
 ---
 
@@ -100,69 +111,32 @@ the **trixie** appliance image by default.
 **Inputs:** `tag` (required, e.g. `v2.5.21`), `make_release` (default true:
 create the tag if missing and attach the ISO to its Release — prerelease when
 the tag has a hyphen), `lyrion_url` (override the Lyrion `.deb` URL),
-`suite` (default `trixie`).
+`suite` (default `trixie`), `usb_image` (default true: also build the
+ready-to-boot disk image, below).
+
+**USB/disk image:** with `usb_image` on, the `usb-image` job builds the system
+image (the same `--stage image --no-bundle` the OTA ships) and turns it into
+`hifi-player-<tag>.img.xz` with `distro/build-usb-image.sh`: the installer's
+A/B layout already written, to flash with Etcher/Rufus and boot as it is (the
+data partition fills the medium at the first boot). It runs beside the ISO,
+never instead of it; `usb-release` attaches it, with its `.sha256` and
+`.sha256.sig`, to the same Release once `build-iso` has created that, and
+`publish-iso-r2.yml` copies it to file.osmiumsound.it along with the ISO.
 
 **Steps:** a separate `qt-payload` job on the bare runner builds the Qt on-screen interface (`native-ui-qt/ci/build-payload.sh`, needs Docker) → build the Electron app (still required by `build-distro.sh --app-dir`) and the web admin → `distro/build-distro.sh --app-dir … --qt-dir … --app-version <tag> --suite <suite>` as root → `hifi-player-<tag>.iso` → sha256 + **Ed25519 signature of the `.sha256` sidecar** (same key as the OS channel) → `latest.json` (`make-iso-manifest.py`, the manifest Osmium Flasher polls) → artifact `hifi-player-iso-<tag>` → optional Release upload.
 
 The ISO itself is **not** served from GitHub to end users: the published image,
-its sidecars and `latest.json` are uploaded to **file.osmiumsound.it** (the
-flasher reads `https://file.osmiumsound.it/latest.json`). `tools/publish-iso.sh`
-produces that exact set of files by hand when needed.
+its sidecars and the flasher's manifest are uploaded to **file.osmiumsound.it**
+by `publish-iso-r2.yml`. Two channels, the two choices Osmium Flasher offers:
+a stable tag (`vX.Y.Z`) writes `latest.json` and every version stays in the
+bucket; a dev tag (`vX.Y.Z-dev.N`) writes `latest-dev.json` and the previous
+dev files are removed. An alpha is never published there. `tools/publish-iso.sh`
+produces the production set of files by hand when needed.
 
 > ⚠️ `gh workflow run build-iso.yml` needs an explicit `--ref <tag-or-branch>`;
 > without it the run builds from `main` regardless of the `tag` input.
 
 **Secrets:** `OTA_SIGNING_KEY`, `GITHUB_TOKEN`.
-
----
-
-## `build-companion-apk.yml` — Android companion
-
-**Trigger:** push of a `companion-v*` tag (stable `companion-vX.Y.Z`, dev
-`companion-vX.Y.Z-svilN`), or manual.
-
-**Jobs:**
-
-- **build** — JDK 17, decodes the keystore from `SIGNING_KEY`, builds and
-  signs the release APK (`KEY_ALIAS`, `KEY_STORE_PASSWORD`, `KEY_PASSWORD`),
-  derives the version from the tag, creates the GitHub Release (prerelease for
-  `-svil`/`-beta` tags) with the APK attached, uploads the APK as an artifact.
-- **test** / **lint** — `gradlew test` and `gradlew lint`, reports uploaded as
-  artifacts.
-- **fdroid-repo** — only for **stable** tags (`!contains(ref, '-svil') &&
-  !contains(ref, '-beta')`): installs `fdroidserver`, fetches the current repo
-  state from `gh-pages`, adds the new APK, signs the index with the dedicated
-  repo keystore (`FDROID_REPO_KEYSTORE`, `FDROID_REPO_KEYSTORE_PASSWORD` —
-  separate from the APK signing key), publishes `fdroid/repo` back to
-  `gh-pages` (`keep_files`). Public URL: `https://osmiumsound.it/fdroid/repo`.
-- **fdroid-dev-repo** — only for `-svilN` tags: same, into `fdroid/dev/repo`
-  (`https://osmiumsound.it/fdroid/dev/repo`), mirroring the app metadata from
-  the stable repo.
-
-The Gradle `publishTrack()` helper in `HiFiMediaPlayer/build.gradle` validates
-the `versionName` format (`X.Y.Z`, `X.Y.Z-beta-N`, …) — an unexpected format
-fails **every** Gradle build, so add a case there before inventing a new scheme.
-
-**Secrets:** `SIGNING_KEY` (base64 keystore), `KEY_ALIAS`, `KEY_STORE_PASSWORD`,
-`KEY_PASSWORD`, `FDROID_REPO_KEYSTORE`, `FDROID_REPO_KEYSTORE_PASSWORD`,
-`GITHUB_TOKEN`.
-
-### One-time keystore setup
-
-```bash
-# APK signing key (once)
-keytool -genkey -v -keystore osmium-companion-release.keystore \
-  -keyalg RSA -keysize 2048 -validity 10000 -alias hifi-media-player
-base64 -w 0 osmium-companion-release.keystore   # → SIGNING_KEY secret
-```
-
-Add `SIGNING_KEY`, `KEY_ALIAS`, `KEY_STORE_PASSWORD`, `KEY_PASSWORD` under
-**Settings → Secrets and variables → Actions**. The F-Droid index key is a
-separate PKCS12 keystore (alias `osmium-sound-fdroid`) stored as
-`FDROID_REPO_KEYSTORE` (base64) + `FDROID_REPO_KEYSTORE_PASSWORD`; the
-workflow appends the password to a checked-out copy of `fdroid/config.yml`
-right before `fdroid update` (fdroidserver reads it only from that file — never
-commit the mutated file).
 
 ---
 
@@ -178,25 +152,21 @@ file.osmiumsound.it; the binaries are unsigned.
 
 ---
 
-## `deploy-pages.yml` — website
+## Website — now in `osmium-sound-site`
 
-Deploys the public site **osmiumsound.it** (Cloudflare Pages project
-`osmium-sound`) with `wrangler pages deploy`. Each deployment is assembled from
-scratch: `website/` from `main` (its `functions/` become the Pages Functions,
-not files) plus `ota/` and `fdroid/` from the `gh-pages` branch, so a file
-taken out of `website/` really disappears from the site. Runs on a push to
-`main` touching `website/**`, after every run of `build-ui-ota.yml` and
-`build-companion-apk.yml` (`workflow_run`, which always uses `main`'s copy of
-this file, whatever branch the tag came from), and by hand. It ends by
-checking that `osmium-sound.pages.dev/ota/latest-*.json` — where devices look
-for updates — match `gh-pages` byte for byte. Changes on `svil`/`alpha` alone
-never deploy.
-
-`gh-pages` is now only the store of `ota/` and `fdroid/`: Cloudflare no longer
-builds from it (automatic Git deployments are off on the project). The D1
+The public site **osmiumsound.it** no longer lives here. It moved to
+[`adri6412/osmium-sound-site`](https://github.com/adri6412/osmium-sound-site),
+which owns the Cloudflare Pages project `osmium-sound` and deploys it with
+`wrangler pages deploy`. Its deploy assembles the snapshot from the site pages
+in that repo plus `ota/` pulled from **this** repo's public `gh-pages` branch, so
+`osmium-sound.pages.dev/ota/latest-*.json` — where x86 devices look for updates —
+stays in sync with every Release. The `deploy-site` job of `build-ui-ota.yml`
+triggers that redeploy after a tag build writes `ota/` (see step 12). The D1
 binding, the secrets (`BETA_USER`, `BETA_PASSWORD`, `KOFI_VERIFICATION_TOKEN`)
-and the custom domains stay in the Cloudflare project. Needs the
-`CLOUDFLARE_API_TOKEN` secret (Account › Cloudflare Pages › Edit).
+and the custom domains stay on the Cloudflare project itself.
+
+> The Raspberry repo (`osmium-sound-raspberry`) does **not** touch the site: its
+> OTA is served from Oracle Object Storage, not Cloudflare Pages.
 
 ---
 
@@ -221,11 +191,7 @@ only.
 - **Retrying a failed Pages/OTA deploy** — delete the leftover duplicate
   `github-pages` artifacts of the failed run before re-running, or the redeploy
   fails again.
-- **Companion build fails at configuration time** — check `versionName`
-  against `publishTrack()`; and when removing a base string, remove it from
-  every `values-XX/strings.xml` too (`lintVitalRelease` fails only on release
-  builds).
 
 ---
 
-**Last updated:** 2026-09-14
+**Last updated:** 2026-11-22

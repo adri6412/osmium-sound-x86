@@ -29,10 +29,10 @@ Come installare e iniziare a usare Osmium Sound sul tuo mini-PC x86.
 > stata avviata (UEFI è il percorso collaudato e consigliato; il BIOS legacy è
 > supportato ma meno testato).
 
-> **Provala in modalità live.** Scegli **Try Osmium Sound (no install)** nel
-> menu di avvio per far partire il kiosk direttamente dalla chiavetta USB —
-> senza scrivere nulla sul disco. Se non fa l'accesso automatico, usa
-> `hifi` / `hifi` alla schermata di login.
+> **Usala dalla chiavetta.** La ISO serve solo a installare. Per far girare
+> Osmium Sound senza toccare il disco del PC, scrivi il file `.img.xz` della
+> stessa release su una chiavetta da almeno 8 GB e avvia da lì: è un sistema
+> completo, con impostazioni e aggiornamenti.
 
 **Nota:** la ISO serve solo per la prima installazione. Tutti gli aggiornamenti
 successivi (interfaccia, sistema, OS, Lyrion) arrivano automaticamente via
@@ -91,8 +91,9 @@ scelto).
   sono già pronti; gli altri si installano dalla web UI di Lyrion
   (Impostazioni → Plugin) e compaiono da soli, senza aggiornare l'app.
 - **In riproduzione**: copertina grande, trasporto e volume, VU meter analogico
-  opzionale (o, se è spento, un'animazione di CD, vinile o musicassetta scelta
-  in Impostazioni → Animazioni), indicatore bit-perfect / ReplayGain.
+  opzionale (o, se è spento, un'animazione di CD, caricatore CD, vinile o
+  musicassetta scelta in Impostazioni → Animazioni), indicatore bit-perfect /
+  ReplayGain.
 - **CD**: inserisci un CD audio per riprodurlo, oppure rippalo in FLAC
   taggati dentro una delle tue sorgenti.
 - **Impostazioni** (a schermo): lingua, Lyrion (server, aspetto del player

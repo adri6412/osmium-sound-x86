@@ -2,9 +2,9 @@
 
 Builds a self-contained, **installable Debian ISO** that turns any x86-64 PC into
 a network streamer running the Osmium Sound kiosk on top of Lyrion Music
-Server. The boot menu shows two branded entries — **Install Osmium Sound**
-(default) and **Try Osmium Sound (no install)** — both booting the same live
-system; after install the machine has a **completely hidden boot** (no GRUB
+Server. The boot menu shows one branded entry, **Install Osmium Sound**,
+which boots the live system as the installer (there is no "Try" entry any
+more: to run from a stick, use the `.img.xz`); after install the machine has a **completely hidden boot** (no GRUB
 menu, no kernel text, branded Plymouth splash) that goes straight into the
 fullscreen player — or into headless operation, if that's what was chosen at
 setup.
@@ -40,9 +40,8 @@ the installed system (or by the setup wizard).
 
 > **Why a live filesystem still exists.** The whole appliance (on-screen interface,
 > Python daemons, helper scripts, the `hifi` user/services) is assembled in the
-> live squashfs. Booting "Try Osmium Sound" just runs that squashfs live, same
-> as any live-build ISO. Booting "Install Osmium Sound" boots the *same*
-> squashfs, then `hifi-disk-install.sh` `unsquashfs`'s the squashfs image
+> live squashfs. Booting "Install Osmium Sound" runs that squashfs live, same
+> as any live-build ISO, then `hifi-disk-install.sh` `unsquashfs`'s the squashfs image
 > straight onto the target disk — a real copy, not a live overlay clone, so the
 > target ends up pristine regardless of anything written during the
 > live/install session itself.
@@ -67,9 +66,9 @@ refuses `--suite bookworm`).
 | Lyrion Music Server | Music server / library / streaming (**installed on first boot**, not in the image) | `lyrionmusicserver.service` (`:9000`) |
 | `hifi-firstboot.sh` | One-shot: downloads + installs Lyrion on the installed system, then removes itself | `hifi-firstboot.service` (`ConditionKernelCommandLine=!boot=live`) |
 | `hifi-update-stage-runner.sh` / `hifi-update-apply-runner.sh` | The two-phase "Update now" (stage live → reboot into `system-update.target` → apply in isolation) | transient `hifi-update-stage`, `hifi-update-stage-resume.service`, `hifi-update-apply.service` |
-| `hifi-backup-run.py` | Backup generations (on demand / weekly timer) | `hifi-backup.service` + `hifi-backup.timer` (shipped by `apply.d/0033-backup-scheduler.sh`) |
+| `hifi-backup-run.py` | Backup generations (on demand / weekly timer) | `hifi-backup.service` + `hifi-backup.timer` (in the image; `apply.d/0033-backup-scheduler.sh` for older installs) |
 | `hifi-mdns-keepalive.sh` | Periodic mDNS/ARP re-announce so idle units stay reachable | `hifi-mdns-keepalive.timer` |
-| `hifi-quiesce-audio-shutdown.sh` | Stops audio cleanly before any shutdown/reboot (DesignWare DMA panic workaround) | `hifi-quiesce-audio-shutdown.service` |
+| `hifi-quiesce-audio-shutdown.sh` | Saves the playback position and stops audio cleanly before any shutdown/reboot (DesignWare DMA panic workaround) | `hifi-playback-quiesce.service` (ExecStop) |
 | Samba (`smbd`), `wsdd2`, Avahi | SMB shares of adopted disks (units start only when a share exists), Windows network discovery, mDNS | disabled until needed / enabled at build |
 | Plymouth theme `hifi` | Boot splash; also shows OTA apply progress | — |
 
@@ -248,9 +247,9 @@ and boot the target:
 sudo dd if=hifi-player-installer.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-> The boot menu shows two branded entries (gold "Osmium Sound" on black,
-> **same logo as the Plymouth splash**): **Install Osmium Sound** (default,
-> auto-starts on timeout) and **Try Osmium Sound (no install)**.
+> The boot menu shows one branded entry (gold "Osmium Sound" on black,
+> **same logo as the Plymouth splash**): **Install Osmium Sound**, which
+> auto-starts on timeout.
 
 Booting "Install Osmium Sound" starts the normal live session, but the on-screen
 interface opens straight into its installer screen (`Wizard.qml`) — a QR code —
@@ -288,19 +287,37 @@ change, Settings → SSH offers a "create SSH login" form.
 Without such a login, recovery is physical: GRUB `init=/bin/bash`, or the
 kiosk's own "reset web-admin password" button on the touchscreen.
 
+### Or: run straight from a USB stick, no install (`.img.xz`)
+
+The same workflow also builds `hifi-player-<tag>.img.xz` (input `usb_image`,
+on by default), released next to the ISO with its own `.sha256` and `.sig`.
+It is the disk the installer would write, already written: the five-partition
+A/B layout, the system image in slot A, GRUB for UEFI (shim, removable path,
+so Secure Boot works) and for legacy BIOS. Write it with balenaEtcher, Rufus,
+Raspberry Pi Imager or `xz -dc … | dd of=/dev/sdX` onto a stick or a disk of
+at least 8 GB, and boot it: it goes straight to the first-boot setup, and it
+takes OTA updates like an installed unit.
+
+At its first boot the initramfs (`scripts/local-premount/hifi-data-grow`)
+stretches the last partition, shipped as a 16 MiB `hifi-data-grow`, to the
+end of the medium, formats it, seeds the first-run marker and renames it
+`hifi-data`. The name is the only trigger, so no installed device is ever
+touched. Built by `distro/build-usb-image.sh` from the same system image the
+OTA ships; the bootloader is installed by that image's own `grub-install`.
+
 ### How the boot menu picks installer vs kiosk
 
 The boot menus are written by the binary hook
 `config/hooks/normal/0500-brand-boot.hook.binary`, which **autodetects** the
 live kernel/initrd location on the ISO (the exact path varies by live-build
 version/arch; hardcoding it previously broke booting with "vmlinuz not
-found") and writes two entries, for both isolinux (BIOS) and grub (UEFI),
-pointing at the **same** kernel/initrd/squashfs:
+found") and writes one entry, for both isolinux (BIOS) and grub (UEFI):
+**Install Osmium Sound**, `... hifi.installer=1`. The "Try Osmium Sound (no
+install)" entry was removed: the live system is the slot image, shaped for a
+disk with a data partition, and a session in RAM could not even fit Lyrion.
+The `.img.xz` is the way to run from a stick.
 
-- **Install Osmium Sound** (default): `... hifi.installer=1`
-- **Try Osmium Sound (no install)**: same append, without that parameter
-
-Both append `boot=live quiet splash loglevel=0 vt.global_cursor_default=0
+It appends `boot=live quiet splash loglevel=0 vt.global_cursor_default=0
 hostname=hifiplayer noautologin`. `api_server.py`'s `/boot_mode` endpoint
 (and `webui_server.py`'s `_boot_mode()`) read `/proc/cmdline` for
 `hifi.installer=1`; the Qt interface checks the same flag itself
@@ -310,7 +327,7 @@ gold-on-black splash comes from
 `config/includes.binary/{isolinux,boot/grub}/splash.png`. To boot into the
 normal player instead of the installer for a one-off test, edit the kernel line at
 the boot prompt (press `Tab` on BIOS / `e` on UEFI) and remove
-`hifi.installer=1`, or just pick "Try Osmium Sound" from the menu.
+`hifi.installer=1`.
 
 ## Audio output
 

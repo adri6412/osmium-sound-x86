@@ -215,7 +215,10 @@ for rel in "${lyrion_links[@]}"; do
 done
 install -m 0644 "$SHARE/lyrionmusicserver.service" "$CH/usr/lib/systemd/system/lyrionmusicserver.service"
 install -m 0644 "$SHARE/hifi-lyrion-ensure.service" "$CH/usr/lib/systemd/system/hifi-lyrion-ensure.service"
-in_chroot systemctl enable lyrionmusicserver.service hifi-lyrion-ensure.service >/dev/null 2>&1
+install -m 0644 "$SHARE/hifi-lyrion-plugins-ensure.service" "$CH/usr/lib/systemd/system/hifi-lyrion-plugins-ensure.service"
+install -m 0644 "$SHARE/hifi-cdplayer-tolerate.service" "$CH/usr/lib/systemd/system/hifi-cdplayer-tolerate.service"
+install -m 0644 "$SHARE/hifi-cdplayer-enable.service" "$CH/usr/lib/systemd/system/hifi-cdplayer-enable.service"
+in_chroot systemctl enable lyrionmusicserver.service hifi-lyrion-ensure.service hifi-lyrion-plugins-ensure.service hifi-cdplayer-tolerate.service hifi-cdplayer-enable.service >/dev/null 2>&1
 in_chroot systemctl enable hifi-rauc-config.service hifi-boot-health.service hifi-boot-watchdog.timer hifi-ab-firstboot.service >/dev/null 2>&1
 in_chroot systemctl disable hifi-ab-finish.service >/dev/null 2>&1 || true
 
@@ -283,6 +286,11 @@ fi
 # after boot instead of holding multi-user.target back while it downloads.
 _out=$(in_chroot systemctl enable hifi-ext-refresh.timer 2>&1) \
     || die "systemctl enable hifi-ext-refresh.timer: $_out"
+# 🚨 The TIMER, not the service: hifi-driverpack-refresh.service has no [Install]
+# either. It re-pins developer driver packs after an OTA and insmods their
+# out-of-tree modules at boot.
+_out=$(in_chroot systemctl enable hifi-driverpack-refresh.timer 2>&1) \
+    || die "systemctl enable hifi-driverpack-refresh.timer: $_out"
 if ! _out=$(in_chroot systemctl enable systemd-sysext.service 2>&1); then
     # alcune build di systemd la distribuiscono senza sezione [Install]:
     # in quel caso il collegamento si fa a mano, il risultato è lo stesso
@@ -298,6 +306,8 @@ fi
 # il controllo fallisce anche quando l'unità è abilitata benissimo.
 [ -L "$CH/etc/systemd/system/timers.target.wants/hifi-ext-refresh.timer" ] \
     || die "hifi-ext-refresh.timer non abilitato: gli add-on non verrebbero ricostruiti dopo un aggiornamento"
+[ -L "$CH/etc/systemd/system/timers.target.wants/hifi-driverpack-refresh.timer" ] \
+    || die "hifi-driverpack-refresh.timer non abilitato: i driver pack non verrebbero ri-applicati dopo un aggiornamento"
 if ! in_chroot systemctl is-enabled systemd-sysext.service >/dev/null 2>&1 \
    && [ ! -L "$CH/etc/systemd/system/sysinit.target.wants/systemd-sysext.service" ]; then
     die "systemd-sysext.service non abilitata: gli add-on non verrebbero mai montati"
@@ -357,6 +367,7 @@ log "initrd dell'immagine (MODULES=most, zstd, plymouth)"
 # Windows): mkinitramfs IGNORA in silenzio gli hook non eseguibili, e gli
 # script hifi-* vanno resi eseguibili come fa l'hook 0300 per quelli legacy.
 chmod +x "$CH/etc/initramfs-tools/hooks/hifi-state" "$CH/etc/initramfs-tools/scripts/local-bottom/hifi-state" \
+    "$CH/etc/initramfs-tools/scripts/local-premount/hifi-data-grow" \
     "$SHARE/initramfs/hooks/hifi-ab" "$SHARE/initramfs/scripts/local-premount/hifi-ab-convert"
 chmod +x "$CH"/usr/local/sbin/hifi-*.sh "$CH"/usr/local/sbin/hifi-*.py "$CH"/usr/local/bin/*.py 2>/dev/null || true
 # the apt shim (/usr/local/bin/apt, ahead of /usr/bin in PATH and in sudo's
@@ -438,6 +449,16 @@ CMDLINE=$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' "$CH/etc/default
 mkdir -p "$CH/boot/grub"
 sed -e "s|@KVER@|$KVER|g" -e "s|@CMDLINE@|$CMDLINE|g" "$SHARE/slot-grub.cfg.tmpl" > "$CH/boot/grub/grub.cfg"
 if command -v grub-script-check >/dev/null 2>&1; then grub-script-check "$CH/boot/grub/grub.cfg" || die "grub.cfg dello slot non valido"; fi
+# This image's identity, as a GRUB environment block (1024 bytes: header, one
+# variable, '#' padding — what grub-editenv writes). The ESP selector reads it
+# with load_env and hifi-boot-health.sh records it once a boot of this image
+# is good: a proven image gets more than one attempt after a bad boot, a new
+# one (whose id was never recorded) stays a one-shot trial. Version plus the
+# commit time: the same build is the same id, a rebuild is a new one.
+OSMIUM_ID="${VERSION:-unknown}@${SOURCE_DATE_EPOCH}"
+case "$OSMIUM_ID" in *[!0-9A-Za-z.@_+-]*) die "OSMIUM_ID non valido: $OSMIUM_ID" ;; esac
+{ printf '# GRUB Environment Block\nOSMIUM_ID=%s\n' "$OSMIUM_ID"; head -c 1024 /dev/zero | tr '\0' '#'; } \
+    | head -c 1024 > "$CH/boot/grub/osmium-id.env"
 # /vmlinuz e /initrd.img (symlink Debian) restano: comodi per il ramo legacy del selettore
 cat > "$CH/etc/fstab" <<'FSTAB'
 # /etc/fstab — Osmium Sound image (A/B slot, read-only root).
@@ -456,7 +477,7 @@ rm -f "$CH/var/lib/dbus/machine-id"
 # credits (api_server.py /credits). Before the cleanup below, which keeps the
 # copyright files anyway; runs on the host, reads the chroot only.
 log "credits.json (pacchetti e licenze)"
-python3 "$SCRIPT_DIR/gen-credits.py" "$CH" "$CH/usr/lib/osmium/credits.json" || die "gen-credits.py fallito"
+python3 "$REPO_ROOT/core/scripts/gen-credits.py" "$CH" "$CH/usr/lib/osmium/credits.json" || die "gen-credits.py fallito"
 
 log "pulizia (apt, doc/man/info, locale, log)"
 in_chroot apt-get clean >/dev/null
@@ -507,6 +528,8 @@ if command -v grub-fstest >/dev/null; then
     grub-fstest "$SQ" cat /boot/grub/grub.cfg 2>&1 | grep -q '^linux ' \
         || die "grub-fstest non legge /boot/grub/grub.cfg dal rootfs.squashfs: GRUB non avvierebbe lo slot"
     log "grub-fstest: il grub.cfg dello slot è leggibile dal squash4 di GRUB"
+    grub-fstest "$SQ" cat /boot/grub/osmium-id.env 2>&1 | grep -qx "OSMIUM_ID=$OSMIUM_ID" \
+        || die "grub-fstest non legge /boot/grub/osmium-id.env dal rootfs.squashfs"
 else
     log "ATTENZIONE: grub-fstest assente sull'host, salto la verifica di lettura GRUB del squashfs"
 fi

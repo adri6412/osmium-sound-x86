@@ -6,7 +6,8 @@ name: Build Osmium Flasher (manual)
 #
 # The binaries are NOT published anywhere by this job. Download the artifacts
 # and upload them to file.osmiumsound.it by hand, the same way the ISO is
-# published, then point website/beta/index.html at the new filenames.
+# published, then point the download page (now in the osmium-sound-site repo)
+# at the new filenames.
 #
 # Reminder: `gh workflow run` without an explicit --ref silently builds from
 # main. Always pass --ref <branch-or-tag> and check the run's branch column.

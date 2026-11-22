@@ -90,6 +90,20 @@ RETRY_MAX = 300
 # A page attempt takes the radio away from whatever is playing on another
 # speaker, so it is kept short and there is never more than one per pass.
 CONNECT_SECONDS = 20
+# 🚨 With the radio down the supervisor must cost nothing. Tearing the stack
+# down on every pass meant half a dozen systemctl processes every 8 s on a box
+# where Bluetooth is off — about 2% of a CPU, forever, for nothing. Once it is
+# down, a pass is one stat() of the state file; whether something came back
+# up behind our back (a hand-started bluetoothd) is checked this often, with
+# a single systemctl call.
+IDLE_RECHECK_SECONDS = 300
+# The radio up only for a paired remote (output off, no pairing window): the
+# full pass -- adapter, units, `bluetoothctl info` on every remote -- is there
+# to keep the adapter powered and to show "connected" in Settings, and every
+# 8 s it cost ~1.5% of a CPU on a box nobody was using. A remote reconnects by
+# itself on a key press either way; with the state file unchanged the pass
+# runs this often instead, and a SIGHUP still runs it at once.
+REMOTES_ONLY_RECHECK_SECONDS = 60
 
 _stop = False
 _wake = False
@@ -213,6 +227,53 @@ def adapter_powered():
     return "Powered: yes" in out(["bluetoothctl", "show"], 10)
 
 
+# 🚨 A Bluetooth remote that has gone quiet for a few minutes drops its link
+# to save its battery and comes back on the next key press. That should take
+# a second or two; owners saw 20-40 s. The kernel puts a USB Bluetooth
+# controller in runtime suspend 2 s after its last traffic (btusb
+# enable_autosuspend=Y, seen on the "cameretta" box: power/control=auto,
+# runtime_status=suspended), and a suspended controller is slow, on some
+# chips very slow, to pass on the advertising of a remote asking to come
+# back. While the radio is up for something (a remote, a speaker, a pairing)
+# the controller stays awake; when Bluetooth is not used at all it goes back
+# to the kernel's power saving.
+BT_CLASS = os.environ.get("HIFI_BT_SYSFS", "/sys/class/bluetooth")
+
+
+def keep_controller_awake(awake):
+    """power/control of every USB Bluetooth controller: "on" or "auto".
+    Rewritten on every pass, so a controller that came back from a USB reset
+    (a new sysfs node, at the kernel's default) is held again. Returns the
+    controllers changed. UART and SDIO controllers have no such switch."""
+    want = "on" if awake else "auto"
+    changed = []
+    try:
+        names = sorted(os.listdir(BT_CLASS))
+    except OSError:
+        return changed
+    for name in names:
+        if not name.startswith("hci"):
+            continue
+        # hciN/device is the USB interface (1-9:1.0); the switch is on the
+        # USB device above it (1-9).
+        iface = os.path.realpath(os.path.join(BT_CLASS, name, "device"))
+        ctl = os.path.join(os.path.dirname(iface), "power", "control")
+        if "/usb" not in iface or not os.path.isfile(ctl):
+            continue
+        try:
+            with open(ctl) as f:
+                if f.read().strip() == want:
+                    continue
+            with open(ctl, "w") as f:
+                f.write(want)
+            changed.append(name)
+        except OSError as e:
+            log(f"{name}: cannot set power/control={want}: {e}")
+    if changed:
+        log(f"Bluetooth controller {'kept awake' if awake else 'back to power saving'}: {', '.join(changed)}")
+    return changed
+
+
 _CONNECTED_RE = re.compile(r"^\s*Connected:\s*(yes|no)\s*$", re.M)
 
 
@@ -277,6 +338,29 @@ class Supervisor:
         self.state_cache = None   # the last state file that parsed
         self.stamps = {}          # unit -> restart fingerprint
         self.was_wanted = None    # was the radio up last pass, for one log line
+        # The radio is down and stays down until the state file changes.
+        # down_sig is the file's fingerprint when it was read; down_checked
+        # when the stack was last verified to really be down.
+        self.down = False
+        self.down_sig = None
+        self.down_checked = 0.0
+        # Radio up for remotes alone: the file's fingerprint at the last full
+        # pass and when it ran (see REMOTES_ONLY_RECHECK_SECONDS).
+        self.quiet_sig = None
+        self.quiet_at = 0.0
+
+    @staticmethod
+    def state_sig():
+        """What the state file looks like from the outside: enough to tell
+        that api_server rewrote it (it replaces the file, so the inode moves
+        too) without opening it."""
+        try:
+            st = os.stat(STATE_FILE)
+            return (st.st_ino, st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return ("unreadable",)
 
     # ── The owner's choice ───────────────────────────────────────────
     def read_state(self):
@@ -314,10 +398,23 @@ class Supervisor:
         if unit_active(BLUEZ_UNIT):
             run(["bluetoothctl", "power", "off"], 10)
             stop_unit(BLUEZ_UNIT)
+        keep_controller_awake(False)
         self.retry.clear()
         self.seen.clear()
         self.quiet_since.clear()
         self.stamps.clear()
+
+    @staticmethod
+    def stack_up():
+        """Is any part of the stack running? One systemctl process for all of
+        it. The players need no question of their own: they are bound to
+        BlueALSA and cannot outlive it."""
+        units = [BLUEZ_UNIT, AGENT_UNIT, BLUEALSA_UNIT, *SINK_UNITS]
+        r = run(["systemctl", "is-active", *units], 10)
+        if r is None:
+            return True     # could not ask: the full tear-down will tell
+        return any(line.strip() in ("active", "activating", "reloading")
+                   for line in (r.stdout or "").splitlines())
 
     # ── Bluetooth on ─────────────────────────────────────────────────
     def ensure_bluez_config(self):
@@ -387,6 +484,7 @@ class Supervisor:
             return False
         if not adapter_powered():
             run(["bluetoothctl", "power", "on"], 15)
+        keep_controller_awake(True)
         # The agent is up in both cases: it is what lets a pairing go through
         # on a box with no keypad, remote or speaker alike.
         start_unit(AGENT_UNIT)
@@ -510,7 +608,22 @@ class Supervisor:
                 stop_unit(unit)
                 run(["systemctl", "reset-failed", unit], 10)
 
-    def tick(self):
+    def tick(self, force=False):
+        # Radio down and the file untouched since: nothing to do, and nothing
+        # spawned to find that out — see IDLE_RECHECK_SECONDS. A pairing
+        # window cannot open behind this check: opening one rewrites the file.
+        if self.down and not force:
+            if self.state_sig() == self.down_sig:
+                if time.monotonic() - self.down_checked < IDLE_RECHECK_SECONDS:
+                    return
+                self.down_checked = time.monotonic()
+                if not self.stack_up():
+                    return
+                log("part of the Bluetooth stack is running although nothing "
+                    "asked for it; taking it down again")
+                self.tear_down()
+                return
+        sig = self.state_sig()
         state = self.read_state()
         enabled = bool(state.get("enabled"))
         speakers = speakers_of(state)
@@ -528,9 +641,20 @@ class Supervisor:
             self.was_wanted = wanted
 
         if not wanted:
-            self.tear_down()
-            write_status({"enabled": False, "adapter": False, "bluealsa": False,
-                          "speakers": [], "remotes": [], "updated": time.time()})
+            # 🚨 Torn down once, on the way down (or at start-up), not on
+            # every pass: see IDLE_RECHECK_SECONDS.
+            if not self.down:
+                self.tear_down()
+                write_status({"enabled": False, "adapter": False, "bluealsa": False,
+                              "speakers": [], "remotes": [], "updated": time.time()})
+                self.down = True
+                self.down_checked = time.monotonic()
+            self.down_sig = sig
+            return
+        self.down = False
+        remotes_only = not enabled and not pairing
+        if remotes_only and not force and sig == self.quiet_sig \
+                and time.monotonic() - self.quiet_at < REMOTES_ONLY_RECHECK_SECONDS:
             return
 
         up = self.bring_up(audio=enabled)
@@ -593,6 +717,10 @@ class Supervisor:
                       "bluealsa": unit_active(BLUEALSA_UNIT),
                       "speakers": rows, "remotes": remote_rows,
                       "pairing": pairing, "updated": time.time()})
+        if remotes_only:
+            self.quiet_sig, self.quiet_at = sig, time.monotonic()
+        else:
+            self.quiet_sig = None
 
 
 def main():
@@ -600,9 +728,12 @@ def main():
     if not unit_exists(BLUEALSA_UNIT):
         log("hifi-bluealsa.service is missing — nothing to supervise")
     sup = Supervisor()
+    forced = True
     while not _stop:
         try:
-            sup.tick()
+            # A SIGHUP is api_server saying "read it now": never skipped by
+            # the idle check, whatever the file's timestamps say.
+            sup.tick(force=forced)
         except Exception:
             log("tick failed")
             import traceback
@@ -612,6 +743,7 @@ def main():
         while not _stop and not _wake and waited < POLL_SECONDS:
             time.sleep(0.5)
             waited += 0.5
+        forced = _wake
         _wake = False
     log("stopping")
     return 0

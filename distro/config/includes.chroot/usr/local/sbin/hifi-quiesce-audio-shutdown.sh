@@ -18,25 +18,44 @@
 # `shutdown -r now` via logind/polkit, a factory reset, a physical power
 # button via ACPI+logind. Each of those was a fresh place to forget this.
 #
-# Hooking systemd's own shutdown.target instead makes it unconditional: this
-# unit runs before EVERY halt/poweroff/reboot/kexec, however it was
-# triggered, with no per-caller cooperation required (see the .service file
-# for the Before=/Conflicts=shutdown.target ordering that guarantees this).
+# Running as the ExecStop= of a unit that is active from boot makes it
+# unconditional: it runs at the start of EVERY halt/poweroff/reboot/kexec,
+# however it was triggered, with no per-caller cooperation required (see the
+# .service file for the After= ordering that guarantees LMS and squeezelite
+# are still up at that point).
 set -eu
 
-# Capture wherever playback currently is (playing/paused/stopped, track,
-# position) so the next boot can restore it — see
-# hifi-capture-playback-state.py and api_server.py's
+# Capture wherever the internal player's playback currently is (playing/paused/
+# stopped, track, position) so the next boot can restore it, and pause the
+# Bluetooth speakers so they don't come back playing on their own (issue #124)
+# — see hifi-capture-playback-state.py and api_server.py's
 # _resume_playback_after_boot for the read side. Must run BEFORE squeezelite
-# (and LMS, via the unit's Before=lyrionmusicserver.service) get stopped
-# below, while a live status is still there to query. Best-effort: a failure
+# and LMS are stopped -- the unit's After= ordering puts this ahead of both --
+# while a live status is still there to query. Best-effort: a failure
 # here (LMS unreachable, nothing playing) just means no resume next boot,
 # same as before this existed — never worth delaying a shutdown over.
 python3 /usr/local/sbin/hifi-capture-playback-state.py 2>/dev/null || true
 
-if [ "$(systemctl is-active camilladsp.service 2>/dev/null)" = "active" ] \
-        || [ "$(systemctl is-active squeezelite.service 2>/dev/null)" = "active" ]; then
-    systemctl stop camilladsp.service squeezelite.service 2>/dev/null || true
-    sleep 2
-fi
+# Whatever feeds the DAC: squeezelite, or CamillaDSP / the player side's PCM
+# to DSD conversion behind the Loopback -- including each audio zone's own
+# squeezelite (hifi-zone@<id>) and its player-side converter instance
+# (hifi-pcm2dsd-player@<id>).
+# --no-block: during a shutdown they already have a stop job queued behind
+# this unit's, and a blocking `systemctl stop` would wait on it -- for this
+# very script to finish -- until TimeoutStopSec. Queued (or merged with the
+# job already there) it runs right after this exits, long before
+# device_shutdown() reaches the DMA controller.
+AUDIO_UNITS="camilladsp.service hifi-pcm2dsd-player.service squeezelite.service"
+# The zone and converter instances come and go, so resolve the active ones now.
+INSTANCES="$(systemctl list-units --plain --no-legend --state=active \
+    'hifi-zone@*.service' 'hifi-pcm2dsd-player@*.service' 2>/dev/null \
+    | awk '{print $1}')"
+AUDIO_UNITS="$AUDIO_UNITS $INSTANCES"
+for unit in $AUDIO_UNITS; do
+    if [ "$(systemctl is-active "$unit" 2>/dev/null)" = "active" ]; then
+        # shellcheck disable=SC2086
+        systemctl --no-block stop $AUDIO_UNITS 2>/dev/null || true
+        break
+    fi
+done
 exit 0

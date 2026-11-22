@@ -46,9 +46,9 @@ class FileOpsBase(unittest.TestCase):
         with ss.app.app_context():
             return ss._file_op_targets(data, need_dest=need_dest)
 
-    def run_job(self, op, paths, dest=None):
+    def run_job(self, op, paths, dest=None, exists="keep"):
         jid = ss._file_job_new(op)
-        ss._file_worker(jid, op, paths, dest)
+        ss._file_worker(jid, op, paths, dest, exists)
         return ss._FILE_JOBS[jid]
 
 
@@ -183,6 +183,120 @@ class CopyMoveDeleteTests(FileOpsBase):
         self.assertIsNotNone(err)
 
 
+class ExistsModeTests(FileOpsBase):
+    """`exists` on copy/move: what happens to a name the destination already
+    has -- keep both (default), skip it or replace it, folders merged."""
+
+    def setUp(self):
+        super().setUp()
+        # the destination already has this album, with an older 01.flac and
+        # without the cover
+        os.makedirs(os.path.join(self.root, "Dest", "Album", "CD1"))
+        with open(os.path.join(self.root, "Dest", "Album", "CD1", "01.flac"), "wb") as f:
+            f.write(b"old")
+
+    def read(self, *parts):
+        with open(os.path.join(self.root, *parts), "rb") as f:
+            return f.read()
+
+    def test_skip_merges_and_leaves_what_is_there(self):
+        job = self.run_job("copy", [os.path.join(self.root, "Album")], os.path.join(self.root, "Dest"), "skip")
+        self.assertEqual(job["state"], "done")
+        self.assertEqual(job["skipped"], 1)
+        self.assertEqual(self.read("Dest", "Album", "CD1", "01.flac"), b"old")
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "Dest", "Album", "cover.jpg")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "Dest", "Album (2)")))
+
+    def test_replace_merges_and_overwrites(self):
+        job = self.run_job("copy", [os.path.join(self.root, "Album")], os.path.join(self.root, "Dest"), "replace")
+        self.assertEqual(job["state"], "done")
+        self.assertEqual(self.read("Dest", "Album", "CD1", "01.flac"), b"x" * 1024)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "Dest", "Album (2)")))
+
+    def test_keep_is_still_the_default(self):
+        job = self.run_job("copy", [os.path.join(self.root, "Album")], os.path.join(self.root, "Dest"))
+        self.assertEqual(job["state"], "done")
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "Dest", "Album (2)")))
+        self.assertEqual(self.read("Dest", "Album", "CD1", "01.flac"), b"old")
+
+    def test_move_with_skip_leaves_behind_only_what_was_skipped(self):
+        job = self.run_job("move", [os.path.join(self.root, "Album")], os.path.join(self.root, "Dest"), "skip")
+        self.assertEqual(job["state"], "done")
+        self.assertEqual(job["skipped"], 1)
+        self.assertEqual(self.read("Dest", "Album", "CD1", "01.flac"), b"old")
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "Dest", "Album", "cover.jpg")))
+        # the skipped file stays where it was, the rest is gone from there
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "Album", "CD1", "01.flac")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "Album", "cover.jpg")))
+
+
+class SymlinkEntryTests(FileOpsBase):
+    """A link is acted on as the link. Resolving it first handed the operation
+    to its target: deleting a "Favourites" link to an album deleted the album
+    and left a dangling link behind."""
+
+    def setUp(self):
+        super().setUp()
+        self.album = os.path.join(self.root, "Album")
+        self.link = os.path.join(self.root, "Favourites")
+        os.symlink(self.album, self.link)
+
+    def test_targets_name_the_link_not_what_it_points_at(self):
+        paths, _d, err = self.targets({"paths": [self.link]}, need_dest=False)
+        self.assertIsNone(err)
+        self.assertEqual(paths, [os.path.join(os.path.realpath(self.root), "Favourites")])
+
+    def test_deleting_a_link_keeps_its_target(self):
+        paths, _d, _e = self.targets({"paths": [self.link]}, need_dest=False)
+        job = self.run_job("delete", paths)
+        self.assertEqual(job["state"], "done", job.get("detail"))
+        self.assertFalse(os.path.lexists(self.link))
+        self.assertTrue(os.path.exists(os.path.join(self.album, "CD1", "01.flac")))
+
+    def test_a_trailing_slash_does_not_reach_through_the_link(self):
+        paths, _d, _e = self.targets({"paths": [self.link + "/"]}, need_dest=False)
+        self.run_job("delete", paths)
+        self.assertTrue(os.path.isdir(self.album))
+
+    def test_moving_a_link_moves_the_link(self):
+        dest = os.path.join(self.root, "Dest")
+        paths, d, err = self.targets({"paths": [self.link], "dest": dest}, need_dest=True)
+        self.assertIsNone(err)
+        job = self.run_job("move", paths, d)
+        self.assertEqual(job["state"], "done", job.get("detail"))
+        self.assertTrue(os.path.islink(os.path.join(dest, "Favourites")))
+        self.assertTrue(os.path.isdir(self.album))
+
+    def test_renaming_a_link_renames_the_link(self):
+        with ss.app.test_client() as c:
+            r = c.post("/api/local/rename", json={"path": self.link, "name": "Best"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertTrue(os.path.islink(os.path.join(self.root, "Best")))
+        self.assertTrue(os.path.isdir(self.album))
+
+    def test_a_link_out_of_the_roots_can_go_but_its_target_stays(self):
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        link = os.path.join(self.root, "escape")
+        os.symlink(outside, link)
+        paths, _d, err = self.targets({"paths": [link]}, need_dest=False)
+        self.assertIsNone(err)
+        self.run_job("delete", paths)
+        self.assertTrue(os.path.isdir(outside))
+
+    def test_a_link_inside_a_linked_folder_is_still_confined(self):
+        # The folder part is still resolved: a path through a link that
+        # leaves the roots is refused as before.
+        os.symlink("/etc", os.path.join(self.root, "etc"))
+        _p, _d, err = self.targets({"paths": [os.path.join(self.root, "etc", "passwd")]},
+                                   need_dest=False)
+        self.assertIsNotNone(err)
+
+    def test_a_root_is_still_protected(self):
+        _p, _d, err = self.targets({"paths": [self.root + "/"]}, need_dest=False)
+        self.assertIsNotNone(err)
+
+
 class OwnershipTests(FileOpsBase):
     """The service runs as root, Samba writes as hifimusic: whatever the file
     manager makes has to end up the share account's, or a PC on the network
@@ -266,6 +380,64 @@ class MessageCatalogTests(unittest.TestCase):
                      "msg.jobNotFound"):
             for lang in ("en", "it"):
                 self.assertIn(code, ss.SOURCES_I18N[lang], f"{code} missing in {lang}")
+
+
+class SystemDiskReserveTests(FileOpsBase):
+    """Copies and moves onto the system disk stop at the reserve kept for
+    Lyrion (hifi_diskguard): refused up front when the total does not fit,
+    stopped half way when the disk fills meanwhile."""
+    GB = 1000 ** 3
+
+    def setUp(self):
+        super().setUp()
+        self._dg = (ss.hdg.on_system_disk, ss.hdg._vfs, ss.hdg.RECHECK_BYTES)
+        self.dest = os.path.join(self.root, "Dest")
+        ss.hdg.on_system_disk = lambda p: os.path.abspath(p).startswith(self.dest)
+
+    def tearDown(self):
+        ss.hdg.on_system_disk, ss.hdg._vfs, ss.hdg.RECHECK_BYTES = self._dg
+        super().tearDown()
+
+    def test_refused_up_front(self):
+        ss.hdg._vfs = lambda p: (100 * self.GB, ss.hdg.MAX_RESERVE + 100)    # 100 bytes above the reserve
+        job = self.run_job("copy", [os.path.join(self.root, "Album")], self.dest)
+        self.assertEqual((job["state"], job["code"]), ("error", "disk.noRoom"))
+        self.assertEqual(os.listdir(self.dest), [])
+        msg = ss.hdg.message(ss.hdg.NoRoom("", job["need"], job["room"], job["reserve"]), "it")
+        self.assertIn("Lyrion", msg)
+
+    def test_stopped_half_way_keeps_the_originals_of_a_move(self):
+        calls = {"n": 0}
+
+        def vfs(p):
+            calls["n"] += 1
+            return (100 * self.GB, 10 * self.GB if calls["n"] == 1 else 1 * self.GB)
+        ss.hdg._vfs = vfs
+        ss.hdg.RECHECK_BYTES = 256
+        src = os.path.join(self.root, "Album")
+        with mock.patch("os.rename", side_effect=OSError(18, "EXDEV")):     # as from another disk
+            job = self.run_job("move", [src], self.dest)
+        self.assertEqual((job["state"], job["code"]), ("error", "disk.noRoomStopped"))
+        self.assertTrue(os.path.exists(os.path.join(src, "CD1", "01.flac")))      # nothing lost
+        self.assertFalse(os.path.exists(os.path.join(self.dest, "Album", "CD1", "01.flac")))   # no half file
+
+    def test_other_disk_refused_when_full(self):
+        # A second disk / USB stick has no reserve of ours, but a copy must
+        # still fit in its free space, with the plain wording (issue #118).
+        ss.hdg.on_system_disk = lambda p, sys_dev=None: False
+        ss.hdg._vfs = lambda p: (100 * self.GB, 0)
+        job = self.run_job("copy", [os.path.join(self.root, "Album")], self.dest)
+        self.assertEqual((job["state"], job["code"]), ("error", "disk.noRoom"))
+        self.assertEqual(job["reserve"], 0)
+        self.assertEqual(os.listdir(self.dest), [])
+        msg = ss.hdg.message(ss.hdg.NoRoom("", job["need"], job["room"], job["reserve"]), "en")
+        self.assertNotIn("Lyrion", msg)         # no reserve talk for a plain disk
+
+    def test_other_disk_allows_what_fits(self):
+        ss.hdg.on_system_disk = lambda p, sys_dev=None: False
+        ss.hdg._vfs = lambda p: (100 * self.GB, 100 * self.GB)
+        job = self.run_job("copy", [os.path.join(self.root, "Album")], self.dest)
+        self.assertEqual(job["state"], "done")
 
 
 if __name__ == "__main__":

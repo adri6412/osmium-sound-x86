@@ -167,6 +167,7 @@ apply)
     # dell'intero pacchetto — una cartella nuova che non compare qui viene
     # scaricata, verificata e poi silenziosamente buttata via.
     [ -d "$NEWROOT/opt/hifi-qt" ]        && { mkdir -p /opt/hifi-qt; cp -af "$NEWROOT/opt/hifi-qt/." /opt/hifi-qt/; }
+    [ -d "$NEWROOT/opt/hifi-np" ]        && { mkdir -p /opt/hifi-np; cp -af "$NEWROOT/opt/hifi-np/." /opt/hifi-np/; }
 
     # normalise CRLF + perms for the things we just shipped
     for f in /usr/local/bin/api_server.py /usr/local/bin/vu_meter_daemon.py \
@@ -199,6 +200,17 @@ apply)
         systemctl enable hifi-bt-out.service 2>/dev/null || true
         systemctl restart hifi-bt-out.service 2>/dev/null || true
     fi
+    # Audio zones and Lyrion's PCM to DSD rules (hifi-zones.service): enabled
+    # only — it runs at the next boot, before Lyrion, which is when it is needed.
+    if [ -f /etc/systemd/system/hifi-zones.service ]; then
+        systemctl enable hifi-zones.service 2>/dev/null || true
+    fi
+    # The system disk's reserve for Lyrion (hifi-disk-reserve.service): the
+    # size now, the group for Lyrion at the next boot, when it starts after it.
+    if [ -f /etc/systemd/system/hifi-disk-reserve.service ]; then
+        systemctl enable hifi-disk-reserve.service 2>/dev/null || true
+        systemctl start hifi-disk-reserve.service 2>/dev/null || true
+    fi
     if [ -f /etc/systemd/system/hifi-webui.service ]; then
         systemctl enable hifi-webui.service 2>/dev/null || true
     fi
@@ -207,6 +219,12 @@ apply)
     fi
     if [ -f /etc/systemd/system/hifi-update-apply.service ]; then
         systemctl enable hifi-update-apply.service 2>/dev/null || true
+    fi
+    # Saves the playback position and quiets the audio at shutdown (it
+    # replaces hifi-quiesce-audio-shutdown.service, whose leftover
+    # shutdown.target.wants link kept it from ever running).
+    if [ -f /etc/systemd/system/hifi-playback-quiesce.service ]; then
+        systemctl enable hifi-playback-quiesce.service 2>/dev/null || true
     fi
 
     write_status 'done' 100 "Componenti aggiornati a $VERSION"
@@ -256,6 +274,7 @@ full)
     [ -d "$NEWROOT/usr/local/share" ]    && { mkdir -p /usr/local/share; cp -af "$NEWROOT/usr/local/share/." /usr/local/share/; }
     [ -d "$NEWROOT/opt/hifi-webui" ]     && { mkdir -p /opt/hifi-webui; cp -af "$NEWROOT/opt/hifi-webui/." /opt/hifi-webui/; }
     [ -d "$NEWROOT/opt/hifi-qt" ]        && { mkdir -p /opt/hifi-qt; cp -af "$NEWROOT/opt/hifi-qt/." /opt/hifi-qt/; }
+    [ -d "$NEWROOT/opt/hifi-np" ]        && { mkdir -p /opt/hifi-np; cp -af "$NEWROOT/opt/hifi-np/." /opt/hifi-np/; }
 
     for f in /usr/local/bin/api_server.py /usr/local/bin/vu_meter_daemon.py \
              /usr/local/bin/sources_server.py /usr/local/bin/webui_server.py \
@@ -271,6 +290,11 @@ full)
     write_status restarting 90 "Riavvio servizi…"
     systemctl daemon-reload || true
     for svc in hifi-vumeter hifi-sources squeezelite; do
+        # A player the owner switched off (server-only mode) stays off: a
+        # restart would start it again until the next reboot.
+        if [ "$svc" = squeezelite ] && [ "$(cat /etc/hifi-player/player-enabled 2>/dev/null)" = 0 ]; then
+            continue
+        fi
         systemctl restart "$svc" 2>/dev/null || true
     done
     # Bluetooth speakers: hifi-bt-out.service is the only Bluetooth unit that
@@ -284,6 +308,17 @@ full)
         systemctl enable hifi-bt-out.service 2>/dev/null || true
         systemctl restart hifi-bt-out.service 2>/dev/null || true
     fi
+    # Audio zones and Lyrion's PCM to DSD rules (hifi-zones.service): enabled
+    # only — it runs at the next boot, before Lyrion, which is when it is needed.
+    if [ -f /etc/systemd/system/hifi-zones.service ]; then
+        systemctl enable hifi-zones.service 2>/dev/null || true
+    fi
+    # The system disk's reserve for Lyrion (hifi-disk-reserve.service): the
+    # size now, the group for Lyrion at the next boot, when it starts after it.
+    if [ -f /etc/systemd/system/hifi-disk-reserve.service ]; then
+        systemctl enable hifi-disk-reserve.service 2>/dev/null || true
+        systemctl start hifi-disk-reserve.service 2>/dev/null || true
+    fi
     if [ -f /etc/systemd/system/hifi-webui.service ]; then
         systemctl enable hifi-webui.service 2>/dev/null || true
         systemctl restart hifi-webui.service 2>/dev/null || true
@@ -293,6 +328,12 @@ full)
     fi
     if [ -f /etc/systemd/system/hifi-update-apply.service ]; then
         systemctl enable hifi-update-apply.service 2>/dev/null || true
+    fi
+    # Saves the playback position and quiets the audio at shutdown (it
+    # replaces hifi-quiesce-audio-shutdown.service, whose leftover
+    # shutdown.target.wants link kept it from ever running).
+    if [ -f /etc/systemd/system/hifi-playback-quiesce.service ]; then
+        systemctl enable hifi-playback-quiesce.service 2>/dev/null || true
     fi
 
     rm -rf "$WORKDIR"
