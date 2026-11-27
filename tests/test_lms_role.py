@@ -102,9 +102,9 @@ class LmsRoleTestCase(unittest.TestCase):
     def test_role_survives_a_reread(self):
         api_server.set_lms_role('follow', '192.168.1.50')
         self.assertEqual(api_server.get_lms_role(),
-                         {'mode': 'follow', 'host': '192.168.1.50'})
+                         {'mode': 'follow', 'host': '192.168.1.50', 'port': 9000})
         api_server.set_lms_role('local', None)
-        self.assertEqual(api_server.get_lms_role(), {'mode': 'local', 'host': None})
+        self.assertEqual(api_server.get_lms_role(), {'mode': 'local', 'host': None, 'port': 9000})
 
     # ── refusals leave both the args and the service alone ───────────
 
@@ -138,7 +138,7 @@ class LmsRoleTestCase(unittest.TestCase):
         self.assertTrue(result['success'])
         self.assertEqual(result['host'], 'nas.local')
         self.assertIn('-s nas.local ', self._args())
-        self.assertEqual(api_server.get_lms_role(), {'mode': 'follow', 'host': 'nas.local'})
+        self.assertEqual(api_server.get_lms_role(), {'mode': 'follow', 'host': 'nas.local', 'port': 9000})
 
     def test_ip_address_is_not_looked_up(self):
         def boom(name, timeout=5):
